@@ -26,14 +26,14 @@ It can be compiled using the makefiles available in the three subfolders: linux,
 ### main_no_fpp.cpp
 
 This is a port of the default demo that does not use the fixed function pipeline (so that it can be compiled using emscripten).
-It uses teapot.h from https://github.com/Flix01/fbtBlend-Header-Only.
+It uses teapot.h from https://github.com/Flix01/Header-Only-GL-Helpers.
 
 Compilation instructions are at the top of the file.
 
 ### main_no_fpp_with_shadows.cpp
 
 This is an enhanced version of main.no_ffp.cpp with shadows, more objects and dynamic resolution (the resolution of the window and of the shadow map can decrease when the frame rate is low).
-It uses teapot.h and dynamic_resolution.h from https://github.com/Flix01/fbtBlend-Header-Only.
+It uses teapot.h and dynamic_resolution.h from https://github.com/Flix01/Header-Only-GL-Helpers.
 
 Compilation instructions are at the top of the file.
 
