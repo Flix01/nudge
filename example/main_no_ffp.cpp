@@ -30,14 +30,16 @@
 // clang++ -O2 main_no_ffp.cpp -o example_no_ffp -I"./" -I"../" ../nudge.cpp -lglut -lGL
 // (Optionally with -march=haswell)
 // Or:
-// g++ main_no_ffp.cpp -o example_no_ffp -I"./" -I"../" ../nudge.cpp -lglut -lGL
+// g++ -no-pie main_no_ffp.cpp -o example_no_ffp -I"./" -I"../" ../nudge.cpp -lglut -lGL
 // (Optionally with -march=haswell)
 // [AFAIR g++ version 5.4.0 20160609 (Ubuntu 5.4.0-6ubuntu1~16.04.4) does not work correctly with -O2 or -O3]
 
 // Emscripten
 //------------
+// SIMD version (it does not work for me):
 // em++ -O2 -D"NUM_SIMULATION_STEPS=1" -D"NUM_SIMULATION_ITERATIONS=5" -D"NUM_BOXES=16" -D"NUM_SPHERES=8" -D"MAX_BODY_COUNT=32" -D"ARENA_SIZE=(128*1024)"  -D"WINDOW_WIDTH=960" -D"WINDOW_HEIGHT=540" -fno-rtti -fno-exceptions -msse2 -o html/nudge.html main_no_ffp.cpp ../nudge.cpp -I"./" -I"../" -s LEGACY_GL_EMULATION=0 -lglut --closure 1
-// Then run html/nudge.html locally with Firefox or by using a web server for other browsers.
+// Then run html/nudge.html by using a web server.
+// This demo is not ready for SIMDE (simd emulation) support. Please see "main_no_ffp_with_shadows.cpp" if interested.
 
 // Windows
 //---------

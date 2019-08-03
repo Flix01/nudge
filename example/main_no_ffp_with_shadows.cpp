@@ -30,14 +30,18 @@
 // clang++ -O2 main_no_ffp_with_shadows.cpp -o example_no_ffp_with_shadows -I"./" -I"../" ../nudge.cpp -lglut -lGL
 // (Optionally with -march=haswell)
 // Or:
-// g++ main_no_ffp_with_shadows.cpp -o example_no_ffp_with_shadows -I"./" -I"../" ../nudge.cpp -lglut -lGL
+// g++ -O3 -no-pie -fno-pie main_no_ffp_with_shadows.cpp -o example_no_ffp_with_shadows -I"./" -I"../" ../nudge.cpp -lglut -lGL
 // (Optionally with -march=haswell)
 // [AFAIR g++ version 5.4.0 20160609 (Ubuntu 5.4.0-6ubuntu1~16.04.4) does not work correctly with -O2 or -O3]
 
 // Emscripten
 //------------
+// SIMD version (it does not work for me):
 // em++ -O2 -D"NUM_SIMULATION_STEPS=1" -D"NUM_SIMULATION_ITERATIONS=5" -D"NUM_BOXES=16" -D"NUM_SPHERES=8" -D"MAX_BODY_COUNT=32" -D"ARENA_SIZE=(128*1024)"  -D"WINDOW_WIDTH=960" -D"WINDOW_HEIGHT=540" -fno-rtti -fno-exceptions -msse2 -o html/nudge_with_shadows.html main_no_ffp_with_shadows.cpp ../nudge.cpp -I"./" -I"../" -s LEGACY_GL_EMULATION=0 -lglut --closure 1
-// Then run html/nudge_with_shadows.html locally with Firefox or by using a web server for other browsers.
+// Or:
+// SIMDE (SIMD emulated) version (needs emscripten with LLVM-Backend: tested emscripten-upstream-1.13.40):
+// em++ -O3 -DUSE_SIMDE -DSIMDE_NO_NATIVE -fno-rtti -fno-exceptions -D"NUM_SIMULATION_STEPS=1" -D"NUM_SIMULATION_ITERATIONS=5" -D"NUM_BOXES=48" -D"NUM_SPHERES=48" -D"MAX_BODY_COUNT=200" -D"ARENA_SIZE=(1024*1024)"  -D"WINDOW_WIDTH=960" -D"WINDOW_HEIGHT=540" -o html/nudge_with_shadows.html main_no_ffp_with_shadows.cpp ../simde/nudge.cpp -I"../simde/simde" -I"../simde" -I"./" -lglut
+// Then run html/nudge_with_shadows.html by using a web server.
 
 // Windows
 //---------
@@ -49,7 +53,13 @@
 
 
 #include <nudge.h>
-#include <immintrin.h>
+#ifndef USE_SIMDE
+#	include <immintrin.h>
+#else // USE_SIMDE
+//#	define SIMDE_ENABLE_OPENMP	// -fopenmp-simd
+#	include <simde/x86/sse2.h>	// SIMDE library
+//#	include <simde/simde-common.h>	// SIMDE library
+#endif // USE_SIMDE
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,7 +94,7 @@
 #	include <GL/gl.h>
 #endif
 
-#ifdef __EMSCRIPTEN__
+#if (defined(__EMSCRIPTEN__) || (defined(USE_SIMDE) && defined(SIMDE_NO_NATIVE)))
 // No <mm_malloc.h> header in emscripten so far
 static inline void* _mm_malloc (size_t size, size_t alignment)	{
   void *ptr;
@@ -786,10 +796,15 @@ static void GlutIdle(void)			{glutPostRedisplay();}
 static void GlutFakeDrawGL(void) 	{glutDisplayFunc(GlutDrawGL);}
 
 int main(int argc, const char* argv[]) {
-#ifndef __EMSCRIPTEN__
+#if (!defined(__EMSCRIPTEN__) && !defined(USE_SIMDE))	// TODO: #if (defined(__EMSCRIPTEN__) || (defined(USE_SIMDE) && defined(SIMDE_SSE_NO_NATIVE)))
 	// Disable denormals for performance.
+#ifndef USE_SIMDE
     _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
     _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+#else //USE_SIMDE
+    SIMDE_MM_SET_FLUSH_ZERO_MODE(SIMDE_MM_FLUSH_ZERO_ON);
+    SIMDE_MM_SET_DENORMALS_ZERO_MODE(SIMDE_MM_DENORMALS_ZERO_ON);
+#endif //USE_SIMDE
 #endif //__EMSCRIPTEN__	
 
 	// Print information about instruction set.
@@ -847,8 +862,12 @@ int main(int argc, const char* argv[]) {
 	glutInit(&argc, const_cast<char**>(argv));
 	glutInitDisplayMode(GLUT_RGBA | GLUT_DEPTH | GLUT_DOUBLE);
 	glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
+#	ifndef USE_SIMDE
     glutCreateWindow("nudge_no_ffp_with_shadows");
-		
+#	else
+	glutCreateWindow("nudge_no_ffp_with_shadows_nosimd");
+#	endif		
+
 #	ifdef USE_GLEW
     GLenum err = glewInit();
     if( GLEW_OK != err ) {
@@ -982,8 +1001,36 @@ int main(int argc, const char* argv[]) {
     glutIdleFunc(GlutIdle);
     glutReshapeFunc(resize);
 
+#	ifdef USE_SIMDE
+	printf("\nUSING SIMDE (simd emulation).\n");
+#		ifdef SIMDE_AVX2_NATIVE
+		printf("SIMDE: SIMDE_AVX2_NATIVE is defined.\n");
+//#		error SIMDE_AVX2_NATIVE is defined.
+#		endif
+#		ifdef SIMDE_AVX_NATIVE
+		printf("SIMDE: SIMDE_AVX_NATIVE is defined.\n");
+//#		error SIMDE_AVX_NATIVE is defined.
+#		endif
+#		ifdef SIMDE_SSE2_NATIVE
+		printf("SIMDE: SIMDE_SSE2_NATIVE is defined.\n");
+//#		error SIMDE_SSE2_NATIVE is defined.
+#		endif
+#		ifdef SIMDE_SSE_NATIVE
+		printf("SIMDE: SIMDE_SSE_NATIVE is defined.\n");
+//#		error SIMDE_SSE_NATIVE is defined.
+#		endif
+#		ifdef SIMDE_MMX_NATIVE
+		printf("SIMDE: SIMDE_MMX_NATIVE is defined.\n");
+//#		error SIMDE_MMX_NATIVE is defined.
+#		endif
+#		ifdef SIMDE_NO_NATIVE
+		printf("SIMDE: SIMDE_NO_NATIVE is defined.\n");
+#		endif
+#	endif
+
     printf("\nKEYS:\n");
     printf("AROW KEYS + PAGE_UP/PAGE_DOWN:\tmove camera (optionally with CTRL down)\n");
+
 
     updateCameraPos();
 

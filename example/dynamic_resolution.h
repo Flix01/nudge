@@ -1,4 +1,5 @@
-
+// https://github.com/Flix01/Header-Only-GL-Helpers
+//
 /** MIT License
  *
  * Copyright (c) 2017 Flix (https://github.com/Flix01/)
@@ -50,10 +51,14 @@
 //
 //#define DYNAMIC_RESOLUTION_USE_NEAREST_TEXTURE_FILTER             // (undefined is GL_LINEAR) Used only when dynamic resolution kicks in
 //
-//#define DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_MULTIPLIER             // (default is 1.5)
-//#define DYNAMIC_RESOLUTION_SHADOW_MAP_MAX_SIZE                    // (default 2048) shadow_texture.size = DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_MULTIPLIER * max(screen.width,screen.height)
+//#define DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_MULTIPLIER             // needs a value (default is 1.5). When screen is resized, it multiplies its longest dimension to get the shadow texture size.
+//#define DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_FORCE_POT              // when defined the shadow texture size is approximated by its nearest power of two
+//#define DYNAMIC_RESOLUTION_SHADOW_MAP_MAX_SIZE                    // needs a value (default 2048). It clamps: shadow_texture.size = DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_MULTIPLIER * max(screen.width,screen.height); // (or its nearest POT)
 //#define DYNAMIC_RESOLUTION_SHADOW_USE_NEAREST_TEXTURE_FILTER      // (undefined is GL_LINEAR)
+//#define DYNAMIC_RESOLUTION_SHADOW_USE_PCF 4                       // (optional, but needs a value>0, otherwise will be set to zero). Basically it prepares the shadow texture map to be used for PCF (teapot.h is used can track and use this value).
+//                                                                  // Warning: when DYNAMIC_RESOLUTION_SHADOW_USE_PCF is used with emscripten, it needs: -s USE_WEBGL2=1
 //
+//#define DYNAMIC_RESOLUTION_USE_SIMD                               // (experimental) speeds up Dynamic_Resolution_Helper_MultMatrix(...) using SIMD (about 1.5x-2x when compiled with -O3 -DNDEBUG -march=native), Requires -msse (OR -mavx when using double precision).
 //
 //#define DYNAMIC_RESOLUTION_NUM_RENDER_TARGETS                     // (default is 1) Basically it pingpongs render targets, greatly increasing memory consumption. Not sure if it's faster or not and if it's artifact-free.
 
@@ -66,7 +71,7 @@ extern "C"	{
 #endif
 
 #ifndef DYNAMIC_RESOLUTION_VERSION
-#   define DYNAMIC_RESOLUTION_VERSION 1.0
+#   define DYNAMIC_RESOLUTION_VERSION 1.1
 #endif //DYNAMIC_RESOLUTION_VERSION
 
 /* The __restrict and __restrict__ keywords are recognized in both C, at all language levels, and C++, at LANGLVL(EXTENDED).*/
@@ -81,6 +86,21 @@ typedef float  droat;       // short form of dynamic_resolution_float
 #else
 typedef double droat;
 #endif
+
+#ifdef DYNAMIC_RESOLUTION_USE_SIMD
+#if (!defined(__SSE__) && (defined(_MSC_VER) && defined(_M_IX86_FP) && _M_IX86_FP>0))
+#define __SSE__		// _MSC_VER does not always define it... (but it always defines __AVX__)
+#endif // __SSE__
+#ifndef DYNAMIC_RESOLUTION_USE_DOUBLE_PRECISION
+#ifdef __SSE__
+#include <xmmintrin.h>	// SSE
+#endif //__SSE__
+#else // DYNAMIC_RESOLUTION_USE_DOUBLE_PRECISION
+#ifdef __AVX__
+#include <immintrin.h>	// AVX (and everything)
+#endif //__AVX__
+#endif // DYNAMIC_RESOLUTION_USE_DOUBLE_PRECISION
+#endif //DYNAMIC_RESOLUTION_USE_SIMD
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -98,6 +118,10 @@ typedef double droat;
 #ifdef TEAPOT_H_
 #   error Please include dynamic_resolution_h BEFORE teapot_h so you can use additional functions inside teapot_h
 #endif
+
+#ifndef DYNAMIC_RESOLUTION_SHADOW_USE_PCF
+#   define DYNAMIC_RESOLUTION_SHADOW_USE_PCF 0
+#endif //DYNAMIC_RESOLUTION_SHADOW_USE_PCF
 
 // In InitGL() or similar
 void Dynamic_Resolution_Init(float desiredFPS, int enabled);
@@ -140,6 +164,8 @@ void Dynamic_Resolution_SetMinimumFPS(float minimumFPS);
 float Dynamic_Resolution_GetFPS(void);
 float Dynamic_Resolution_GetDynResFactor(void);
 float Dynamic_Resolution_GetShadowMapDynResFactor(void);
+float Dynamic_Resolution_GetShadowMapTextureSize(void); // width == height
+float Dynamic_Resolution_GetShadowMapTexelIncrement(void);
 const char* Dynamic_Resolution_GetInfoString(void);
 
 static __inline void Dynamic_Resolution_Helper_IdentityMatrix(droat* __restrict result16) {
@@ -150,28 +176,72 @@ static __inline void Dynamic_Resolution_Helper_IdentityMatrix(droat* __restrict 
 static __inline void Dynamic_Resolution_Helper_CopyMatrix(droat* __restrict dst16,const droat* __restrict src16) {
     int i;for (i=0;i<16;i++) dst16[i]=src16[i];
 }
+static __inline void Dynamic_Resolution_Helper_MultMatrixUncheckArgs(droat* __restrict result16,const droat* __restrict ml16,const droat* __restrict mr16) {
+    int i,i4;
+#	if (defined(DYNAMIC_RESOLUTION_USE_SIMD) && !defined(DYNAMIC_RESOLUTION_USE_DOUBLE_PRECISION) && defined(__SSE__))
+    __m128 row1 = _mm_loadu_ps(&ml16[0]);
+    __m128 row2 = _mm_loadu_ps(&ml16[4]);
+    __m128 row3 = _mm_loadu_ps(&ml16[8]);
+    __m128 row4 = _mm_loadu_ps(&ml16[12]);
+    for(i=0; i<4; i++) {
+        i4 = 4*i;
+        __m128 brod1 = _mm_set1_ps(mr16[i4]);
+        __m128 brod2 = _mm_set1_ps(mr16[i4 + 1]);
+        __m128 brod3 = _mm_set1_ps(mr16[i4 + 2]);
+        __m128 brod4 = _mm_set1_ps(mr16[i4 + 3]);
+        __m128 row = _mm_add_ps(
+                    _mm_add_ps(
+                        _mm_mul_ps(brod1, row1),
+                        _mm_mul_ps(brod2, row2)),
+                    _mm_add_ps(
+                        _mm_mul_ps(brod3, row3),
+                        _mm_mul_ps(brod4, row4)));
+        _mm_storeu_ps(&result16[i4], row);
+    }
+#	elif (defined(DYNAMIC_RESOLUTION_USE_SIMD) && defined(DYNAMIC_RESOLUTION_USE_DOUBLE_PRECISION) && defined(__AVX__))
+    __m256d row1 = _mm256_loadu_pd(&ml16[0]);
+    __m256d row2 = _mm256_loadu_pd(&ml16[4]);
+    __m256d row3 = _mm256_loadu_pd(&ml16[8]);
+    __m256d row4 = _mm256_loadu_pd(&ml16[12]);
+    for(i=0; i<4; i++) {
+        i4 = 4*i;
+        __m256d brod1 = _mm256_set1_pd(mr16[i4]);
+        __m256d brod2 = _mm256_set1_pd(mr16[i4 + 1]);
+        __m256d brod3 = _mm256_set1_pd(mr16[i4 + 2]);
+        __m256d brod4 = _mm256_set1_pd(mr16[i4 + 3]);
+        __m256d row = _mm256_add_pd(
+                    _mm256_add_pd(
+                        _mm256_mul_pd(brod1, row1),
+                        _mm256_mul_pd(brod2, row2)),
+                    _mm256_add_pd(
+                        _mm256_mul_pd(brod3, row3),
+                        _mm256_mul_pd(brod4, row4)));
+        _mm256_storeu_pd(&result16[i4], row);
+    }
+#	else //DYNAMIC_RESOLUTION_USE_SIMD
+    /* reference implementation */
+    droat mri4plus0,mri4plus1,mri4plus2,mri4plus3;
+    for(i = 0; i < 4; i++) {
+        i4=4*i;mri4plus0=mr16[i4];mri4plus1=mr16[i4+1];mri4plus2=mr16[i4+2];mri4plus3=mr16[i4+3];
+        result16[  i4] = ml16[0]*mri4plus0 + ml16[4]*mri4plus1 + ml16[ 8]*mri4plus2 + ml16[12]*mri4plus3;
+        result16[1+i4] = ml16[1]*mri4plus0 + ml16[5]*mri4plus1 + ml16[ 9]*mri4plus2 + ml16[13]*mri4plus3;
+        result16[2+i4] = ml16[2]*mri4plus0 + ml16[6]*mri4plus1 + ml16[10]*mri4plus2 + ml16[14]*mri4plus3;
+        result16[3+i4] = ml16[3]*mri4plus0 + ml16[7]*mri4plus1 + ml16[11]*mri4plus2 + ml16[15]*mri4plus3;
+    }
+#	endif //DYNAMIC_RESOLUTION_USE_SIMD
+}
 static __inline void Dynamic_Resolution_Helper_MultMatrix(droat* __restrict result16,const droat* __restrict ml16,const droat* __restrict mr16) {
-    int i,j,j4;
     if (result16==ml16) {
         droat ML16[16];Dynamic_Resolution_Helper_CopyMatrix(ML16,ml16);
-        Dynamic_Resolution_Helper_MultMatrix(result16,ML16,mr16);
+        Dynamic_Resolution_Helper_MultMatrixUncheckArgs(result16,ML16,mr16);
         return;
     }
     else if (result16==mr16) {
         droat MR16[16];Dynamic_Resolution_Helper_CopyMatrix(MR16,mr16);
-        Dynamic_Resolution_Helper_MultMatrix(result16,ml16,MR16);
+        Dynamic_Resolution_Helper_MultMatrixUncheckArgs(result16,ml16,MR16);
         return;
     }
-    for(i = 0; i < 4; i++) {
-        for(j = 0; j < 4; j++) {
-            j4 = 4*j;
-            result16[i+j4] =
-                ml16[i]    * mr16[0+j4] +
-                ml16[i+4]  * mr16[1+j4] +
-                ml16[i+8]  * mr16[2+j4] +
-                ml16[i+12] * mr16[3+j4];
-        }
-    }
+    Dynamic_Resolution_Helper_MultMatrixUncheckArgs(result16,ml16,mr16);
 }
 void Dynamic_Resolution_Helper_InvertFast(droat* __restrict mOut16,const droat* __restrict m16);
 
@@ -192,6 +262,10 @@ static __inline void Dynamic_Resolution_Helper_ConvertMatrixf2d16(double* __rest
 #define DYNAMIC_RESOLUTION_IMPLEMENTATION_H // Additional guard
 
 #include <stdio.h> // sprintf
+
+#ifndef DYNAMIC_RESOLUTION_SHADOW_USE_PCF
+#   define DYNAMIC_RESOLUTION_SHADOW_USE_PCF 0
+#endif //DYNAMIC_RESOLUTION_SHADOW_USE_PCF
 
 #ifdef __cplusplus
 extern "C"	{
@@ -310,8 +384,52 @@ typedef struct {
 
     droat shadowVpMatrix[16];
 
-    int shadow_width,shadow_height;
+    int shadow_texture_size;
 } RenderTarget;
+
+#ifdef DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_FORCE_POT
+static __inline int Dynamic_Resolution_Helper_IsPowerOfTwo(unsigned int n) {return ((n & (n - 1)) == 0) ? 1 : 0;}
+static __inline unsigned Dynamic_Resolution_Helper_PreviousPowerOfTwo( unsigned x ) {
+    // http://stackoverflow.com/questions/2679815/previous-power-of-2
+    if (x == 0) return 0;
+    else {
+        // x--; Uncomment this, if you want a strictly less than 'x' result.
+        x |= (x >> 1);
+        x |= (x >> 2);
+        x |= (x >> 4);
+        x |= (x >> 8);
+        x |= (x >> 16);
+        return x - (x >> 1);
+    }
+}
+static __inline unsigned Dynamic_Resolution_Helper_NextPowerOfTwo( unsigned x ) {
+    // http://stackoverflow.com/questions/1322510/given-an-integer-how-do-i-find-the-next-largest-power-of-two-using-bit-twiddlin
+    if (x == 0) return 0;
+    else {
+        x--;
+        x |= x >> 1;   // Divide by 2^k for consecutive doublings of k up to 32,
+        x |= x >> 2;   // and then or the results.
+        x |= x >> 4;
+        x |= x >> 8;
+        x |= x >> 16;
+        x++;           // The result is a number of 1 bits equal to the number
+        // of bits in the original number, plus 1. That's the
+        // next highest power of 2.
+        return x;
+    }
+}
+static __inline unsigned Dynamic_Resolution_Helper_NearestPowerOfTwo( unsigned x ,unsigned max_value_allowed,unsigned min_value_allowed) {
+    if (Dynamic_Resolution_Helper_IsPowerOfTwo(x)) return x;
+    else {
+        const unsigned prev = Dynamic_Resolution_Helper_PreviousPowerOfTwo(x);
+        const unsigned next = Dynamic_Resolution_Helper_NextPowerOfTwo(x);
+        unsigned best = (x-prev<next-x) ? prev : next;
+        if (best>max_value_allowed) best = max_value_allowed;
+        else if (best<=min_value_allowed) best = min_value_allowed;
+        return best;
+    }
+}
+#endif //DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_FORCE_POT
 
 static void RenderTarget_Create(RenderTarget* rt,float desiredFPS,int enabled) {
     rt->FPS = rt->desiredFPS = desiredFPS;
@@ -370,14 +488,31 @@ static void RenderTarget_Destroy(RenderTarget* rt) {
     if (rt->shadow_texture[0])         glDeleteTextures(DYNAMIC_RESOLUTION_NUM_RENDER_TARGETS,rt->shadow_texture);
     if (rt->shadowProgramId) {glDeleteProgram(rt->shadowProgramId);rt->shadowProgramId=0;}
 }
+static const char* RenderTarget_Helper_GetFramebufferStatusString(GLenum status) {
+    switch(status) {
+    case GL_FRAMEBUFFER_COMPLETE:                       return "GL_FRAMEBUFFER_COMPLETE";
+    case GL_FRAMEBUFFER_UNSUPPORTED:                    return "GL_FRAMEBUFFER_UNSUPPORTED";
+    case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:  return "GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT";
+    case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:          return "GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT";
+    case GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS_EXT:      return "GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS_EXT";
+    case GL_FRAMEBUFFER_INCOMPLETE_FORMATS_EXT:         return "GL_FRAMEBUFFER_INCOMPLETE_FORMATS_EXT";
+    case GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER:         return "GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER";
+    case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER:         return "GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER";
+    case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE:         return "GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE";
+    case GL_FRAMEBUFFER_UNDEFINED:                      return "GL_FRAMEBUFFER_UNDEFINED";
+    default:                                            return "GL_FRAMEBUFFER_UNKNOWN_ERROR";
+    }
+    return  "GL_FRAMEBUFFER_UNKNOWN_ERROR";
+}
+
 static void RenderTarget_Init(RenderTarget* rt,int width, int height) {
-    int i;
+    int i;GLenum filter,shadow_filter;        		
     //glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     if (rt->screenQuadProgramId) {
-        rt->width = width;
+		rt->width = width;
         rt->height = height;
 
-        GLenum filter = GL_LINEAR;
+        filter = GL_LINEAR;
 #       ifdef  DYNAMIC_RESOLUTION_USE_NEAREST_TEXTURE_FILTER
         filter = GL_NEAREST;
 #       endif //DYNAMIC_RESOLUTION_USE_NEAREST_TEXTURE_FILTER
@@ -416,7 +551,7 @@ static void RenderTarget_Init(RenderTarget* rt,int width, int height) {
             {
                 //Does the GPU support current FBO configuration?
                 GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-                if (status!=GL_FRAMEBUFFER_COMPLETE) printf("glCheckFramebufferStatus(...) FAILED.\n");
+                if (status!=GL_FRAMEBUFFER_COMPLETE) printf("glCheckFramebufferStatus(...) FAILED: %s\n",RenderTarget_Helper_GetFramebufferStatusString(status));
             }
         }
         glBindTexture(GL_TEXTURE_2D, 0);
@@ -429,48 +564,59 @@ static void RenderTarget_Init(RenderTarget* rt,int width, int height) {
 #       ifndef DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_MULTIPLIER
 #           define DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_MULTIPLIER (1.5)
 #       endif //DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_MULTIPLIER
-        rt->shadow_width = (width>height ? width : height)*DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_MULTIPLIER;
-        rt->shadow_height = rt->shadow_width;
+        rt->shadow_texture_size = (width>height ? width : height)*DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_MULTIPLIER;
 #       ifndef DYNAMIC_RESOLUTION_SHADOW_MAP_MAX_SIZE
 #           define DYNAMIC_RESOLUTION_SHADOW_MAP_MAX_SIZE (2048)
 #       endif //DYNAMIC_RESOLUTION_SHADOW_MAP_MAX_SIZE
-        if (rt->shadow_width>DYNAMIC_RESOLUTION_SHADOW_MAP_MAX_SIZE) rt->shadow_width = DYNAMIC_RESOLUTION_SHADOW_MAP_MAX_SIZE;
-        if (rt->shadow_height>DYNAMIC_RESOLUTION_SHADOW_MAP_MAX_SIZE) rt->shadow_height = DYNAMIC_RESOLUTION_SHADOW_MAP_MAX_SIZE;
+#       ifdef DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_FORCE_POT
+        rt->shadow_texture_size = (int) Dynamic_Resolution_Helper_NearestPowerOfTwo((unsigned) rt->shadow_texture_size,(DYNAMIC_RESOLUTION_SHADOW_MAP_MAX_SIZE),4);
+#       endif //DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_FORCE_POT
+        if (rt->shadow_texture_size>DYNAMIC_RESOLUTION_SHADOW_MAP_MAX_SIZE) rt->shadow_texture_size = DYNAMIC_RESOLUTION_SHADOW_MAP_MAX_SIZE;
 
-        GLenum shadow_filter = GL_LINEAR;
+        // Debug:
+        //fprintf(stderr,"screen={%d,%d}\tscreenMaxDimMultiplied=%d\trt->shadow_texture_size=%d\n",width,height,(int)((width>height ? width : height)*DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_MULTIPLIER),rt->shadow_texture_size);
+
+        shadow_filter = GL_LINEAR;
 #       ifdef  DYNAMIC_RESOLUTION_SHADOW_USE_NEAREST_TEXTURE_FILTER
         shadow_filter = GL_NEAREST;
 #       endif //DYNAMIC_RESOLUTION_SHADOW_USE_NEAREST_TEXTURE_FILTER
 
         for (i=0;i<DYNAMIC_RESOLUTION_NUM_RENDER_TARGETS;i++)	{
-            rt->shadow_resolution_factor[i] = 1;
+			GLenum clampMode;            
+			rt->shadow_resolution_factor[i] = 1;
 
             glBindTexture(GL_TEXTURE_2D, rt->shadow_texture[i]);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, shadow_filter);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, shadow_filter);
 
-            /*
-#           ifdef DYNAMIC_RESOLUTION_VISUALIZE_DEPTH_TEXTURE
-            //glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE,GL_NONE);
-            //glTexParameteri( GL_TEXTURE_2D, GL_DEPTH_TEXTURE_MODE,GL_LUMINANCE);
-#           else //DYNAMIC_RESOLUTION_VISUALIZE_DEPTH_TEXTURE
-            //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-            //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
-#           endif //DYNAMIC_RESOLUTION_VISUALIZE_DEPTH_TEXTURE
-            */
+#           if DYNAMIC_RESOLUTION_SHADOW_USE_PCF>0
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+            //glTexParameteri(GL_TEXTURE_2D, GL_DEPTH_TEXTURE_MODE, GL_INTENSITY);
+#           endif //DYNAMIC_RESOLUTION_SHADOW_USE_PCF
 
+            // Clamp mode
 #           ifdef __EMSCRIPTEN__
-            glTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, rt->shadow_width, rt->shadow_height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, 0);
-            const GLenum clampMode = GL_CLAMP_TO_EDGE;  // Unluckily WebGL does not support GL_CLAMP or GL_CLAMP_TO_BORDER
-#           else //__EMSCRIPTEN__*/
-            glTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, rt->shadow_width, rt->shadow_height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, 0);
-            const GLenum clampMode = //GL_CLAMP;    // sampling outside of the shadow map gives always shadowed pixels
+            clampMode = GL_CLAMP_TO_EDGE;  // Unluckily WebGL does not support GL_CLAMP or GL_CLAMP_TO_BORDER
+#           else //__EMSCRIPTEN__
+            clampMode = //GL_CLAMP;    // sampling outside of the shadow map gives always shadowed pixels
                    // GL_CLAMP_TO_EDGE;             // sampling outside of the shadow map can give shadowed or unshadowed pixels (it depends on the edge of the shadow map)
                     GL_CLAMP_TO_BORDER;             // sampling outside of the shadow map gives always non-shadowed pixels (if we set the border color correctly)
             if (clampMode==GL_CLAMP_TO_BORDER)  {
                const GLfloat border[] = {1.0f,1.0f,1.0f,0.0f };
                glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
             }
+#           endif //__EMSCRIPTEN__
+
+#           ifdef __EMSCRIPTEN__
+#               if DYNAMIC_RESOLUTION_SHADOW_USE_PCF>0
+                // In WebGL2: [GL_DEPTH_COMPONENT16 -> (GL_UNSIGNED_SHORT or GL_UNSIGNED_INT)], [GL_DEPTH_COMPONENT24 -> GL_UNSIGNED_INT] or [GL_DEPTH_COMPONENT32F -> GL_UNSIGNED_FLOAT] should be OK
+                glTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16, rt->shadow_texture_size, rt->shadow_texture_size, 0, GL_DEPTH_COMPONENT,  GL_UNSIGNED_INT, 0);
+#               else //DYNAMIC_RESOLUTION_SHADOW_USE_PCF==0
+                glTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, rt->shadow_texture_size, rt->shadow_texture_size, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, 0);
+#               endif //DYNAMIC_RESOLUTION_SHADOW_USE_PCF
+#           else //__EMSCRIPTEN__*/
+            glTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, rt->shadow_texture_size, rt->shadow_texture_size, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, 0);
 #           endif // //__EMSCRIPTEN__*/
             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, clampMode );
             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, clampMode );
@@ -484,7 +630,7 @@ static void RenderTarget_Init(RenderTarget* rt,int width, int height) {
             {
                 //Does the GPU support current FBO configuration?
                 GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-                if (status!=GL_FRAMEBUFFER_COMPLETE) printf("glCheckFramebufferStatus(...) FAILED for shadow_frame_buffer.\n");
+                if (status!=GL_FRAMEBUFFER_COMPLETE) printf("glCheckFramebufferStatus(...) FAILED for shadow_frame_buffer: %s\n",RenderTarget_Helper_GetFramebufferStatusString(status));
             }
         }
         glBindTexture(GL_TEXTURE_2D, 0);
@@ -515,6 +661,8 @@ float Dynamic_Resolution_GetShadowMapDynResFactor(void)  {
     if (render_target_index2>=DYNAMIC_RESOLUTION_NUM_RENDER_TARGETS) render_target_index2-=DYNAMIC_RESOLUTION_NUM_RENDER_TARGETS;
     return render_target.shadow_resolution_factor[render_target_index2];
 }
+float Dynamic_Resolution_GetShadowMapTextureSize(void)  {return (float) render_target.shadow_texture_size;}
+float Dynamic_Resolution_GetShadowMapTexelIncrement(void)   {return Dynamic_Resolution_GetShadowMapDynResFactor()/(float) render_target.shadow_texture_size;}
 GLint Dynamic_Resolution_Get_Shadow_Texture_ID() {
     //return render_target.shadow_texture[render_target.render_target_index];
     int render_target_index2 = render_target.render_target_index + 1;
@@ -689,17 +837,18 @@ void Dynamic_Resolution_Bind_Shadow() {
     glBindFramebuffer(GL_FRAMEBUFFER, render_target.shadow_frame_buffer[render_target.render_target_index]);
     if (render_target.enabled)  {
         render_target.shadow_resolution_factor[render_target.render_target_index] = render_target.factor;
-        glViewport(0, 0, (int)(render_target.shadow_width * render_target.factor),(int) (render_target.shadow_height * render_target.factor));
+        glViewport(0, 0, (int)(render_target.shadow_texture_size * render_target.factor),(int) (render_target.shadow_texture_size * render_target.factor));
     }
     else
-        glViewport(0, 0, (int)(render_target.shadow_width),(int) (render_target.shadow_height));
+        glViewport(0, 0, (int)(render_target.shadow_texture_size),(int) (render_target.shadow_texture_size));
     glEnableVertexAttribArray(render_target.shadow_aLoc_APosition);
     glUseProgram(render_target.shadowProgramId);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glCullFace(GL_FRONT);
     //glFrontFace(GL_CW);   // Same as above
+    //glEnable(GL_POLYGON_OFFSET_FILL);glPolygonOffset(-2.0f, -2.0f);
     glEnable(GL_DEPTH_CLAMP);
-    //printf("%1.0f,%1.0f\n",render_target.shadow_width * render_target.shadow_resolution_factor,render_target.shadow_height * render_target.shadow_resolution_factor);
+    //printf("%1.0f,%1.0f\n",render_target.shadow_texture_size * render_target.shadow_resolution_factor,render_target.shadow_texture_size * render_target.shadow_resolution_factor);
     //printf("render_target.shadow_aLoc_APosition: %d\n",render_target.shadow_aLoc_APosition);
 }
 
@@ -713,18 +862,19 @@ void Dynamic_Resolution_Shadow_Set_VpMatrix(const droat vpMatrix[16]) {
 
 void Dynamic_Resolution_Shadow_Set_MMatrix(const droat mMatrix[16]) {
     droat tmp[16];
-    Dynamic_Resolution_Helper_MultMatrix(tmp,render_target.shadowVpMatrix,mMatrix);
+    Dynamic_Resolution_Helper_MultMatrixUncheckArgs(tmp,render_target.shadowVpMatrix,mMatrix);
     Dynamic_Resolution_Helper_GlUniformMatrix4v(render_target.shadow_uLoc_shadowMvpMatrix,1,GL_FALSE,tmp);
 }
 
 void Dynamic_Resolution_Unbind_Shadow() {
     glDisable(GL_DEPTH_CLAMP);
+    //glDisable(GL_POLYGON_OFFSET_FILL);
     //glFrontFace(GL_CCW);   // Same as below
     glCullFace(GL_BACK);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glUseProgram(0);
     glDisableVertexAttribArray(render_target.shadow_aLoc_APosition);
-    glViewport(0, 0, render_target.shadow_width, render_target.shadow_height);
+    glViewport(0, 0, render_target.shadow_texture_size, render_target.shadow_texture_size);
     glBindFramebuffer(GL_FRAMEBUFFER,render_target.default_frame_buffer);
 }
 
@@ -776,7 +926,7 @@ static void Dynamic_Resolution_Calculate_Factor(float elapsed_seconds_from_last_
             }
         }
         else render_target.factor=1.f;
-        sprintf(render_target.tmp,"FPS: %1.0f DYN-RES:%s DRF=%1.3f (%dx%d) (shadow_map (when used):%dx%d)",render_target.FPS,render_target.enabled ? "ON " : "OFF",render_target.factor,render_target.width,render_target.height,render_target.shadow_width,render_target.shadow_height);
+        sprintf(render_target.tmp,"FPS: %1.0f DYN-RES:%s DRF=%1.3f (%dx%d) (shadow_map (when used):%dx%d)",render_target.FPS,render_target.enabled ? "ON " : "OFF",render_target.factor,render_target.width,render_target.height,render_target.shadow_texture_size,render_target.shadow_texture_size);
     }
 }
 
