@@ -35,7 +35,9 @@ Compilation instructions are at the top of the file.
 This is an enhanced version of main.no_ffp.cpp with shadows, more objects and dynamic resolution (the resolution of the window and of the shadow map can decrease when the frame rate is low).
 It uses teapot.h and dynamic_resolution.h from https://github.com/Flix01/Header-Only-GL-Helpers.
 
-Compilation instructions are at the top of the file (this demo can also be compiled with the simd-emulated version of nudge, slower but good for emscripten builds).
+Compilation instructions are at the top of the file. 
+- This demo can also be compiled with the simd-emulated version of nudge, slower but good for emscripten builds (a .html is present in the html subfolder, and can be run locally using a webserver, or emrun).
+
 
 
 **PREREQUISITES**
