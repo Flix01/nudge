@@ -10,10 +10,13 @@ In this folder are present:
 
 ![example](./screenshots/example_no_ffp.png)
 
-<b>main_no_ffp_with_shadows.cpp:</b> 
+<b>main_no_ffp_with_shadows.cpp (here with 8192 rigid bodies):</b> 
 
 ![example](./screenshots/example_no_ffp_with_shadows.gif)
 
+<b>main_no_ffp_with_shadows.cpp (emscripten-upstream-1.13.40) (here with 800 rigid bodies):</b> 
+
+![example](./screenshots/example_no_ffp_with_shadows_emscripten.png)
 
 
 ## HOW TO COMPILE
@@ -36,6 +39,7 @@ This is an enhanced version of main.no_ffp.cpp with shadows, more objects and dy
 It uses teapot.h and dynamic_resolution.h from https://github.com/Flix01/Header-Only-GL-Helpers.
 
 Compilation instructions are at the top of the file. 
+
 - This demo can also be compiled with the simd-emulated version of nudge, slower but good for emscripten builds (a .html is present in the html subfolder, and can be run locally using a webserver, or emrun).
 
 
