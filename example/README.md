@@ -16,8 +16,7 @@ In this folder are present:
 
 <b>main_no_ffp_with_shadows.cpp (emscripten-upstream-1.13.40) (here with 800 rigid bodies):</b> 
 
-![example](./screenshots/example_no_ffp_with_shadows_emscripten.png)
-
+<img src="./screenshots/example_no_ffp_with_shadows_emscripten.png" width="250">
 
 ## HOW TO COMPILE
 
