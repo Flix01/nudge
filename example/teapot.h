@@ -1321,7 +1321,7 @@ Teapot_MeshData* Teapot_MeshData_GetMeshUnderMouse(Teapot_MeshData* const* meshe
         const Teapot_MeshData* md = meshes[i];
         const tpoat* obbMatrix = md->mMatrix;
         const TeapotMeshEnum meshId = md->meshId;
-        tpoat tMin = 0;tpoat tMax = 1000000000000;
+        tpoat tMin = 0;tpoat tMax = (tpoat)1000000000000;
         int noCollisionDetected = 0;
         tpoat obbPosDelta[3] =  {obbMatrix[12]-rayOrigin[0],obbMatrix[13]-rayOrigin[1],obbMatrix[14]-rayOrigin[2]};        
         //const float scaling[3] = {meshId==TEAPOT_MESH_CAPSULE ? ((md->scaling[0]+md->scaling[2])*0.5) : md->scaling[0],md->scaling[1],meshId==TEAPOT_MESH_CAPSULE ? ((md->scaling[0]+md->scaling[2])*0.5) : md->scaling[2]};
@@ -1967,7 +1967,7 @@ static int _Teapot_MeshData_Comparer(const void* pmd0,const void* pmd1) {
             //return fabsf(md1->mvMatrix[14])-fabsf(md0->mvMatrix[14]);
             //return (md1->mvMatrix[12]*md1->mvMatrix[12]+md1->mvMatrix[13]*md1->mvMatrix[13]+md1->mvMatrix[14]*md1->mvMatrix[14]) -
             //        (md0->mvMatrix[12]*md0->mvMatrix[12]+md0->mvMatrix[13]*md0->mvMatrix[13]+md0->mvMatrix[14]*md0->mvMatrix[14]);
-        }
+	}
         else return 1;
     }
     else if (md1->color[3]<1.f) return -1;

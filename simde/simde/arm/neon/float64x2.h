@@ -30,14 +30,15 @@
 
 #if defined(SIMDE_NEON64_NATIVE)
 #  if defined(HEDLEY_GCC_VERSION) && !HEDLEY_GCC_VERSION_CHECK(4,9,0)
+#  elif defined(HEDLEY_MSVC_VERSION)
 #  else
 #    define SIMDE_NEON_HAVE_FLOAT64X2
 #  endif
 #endif
 
 typedef union {
-#if defined(SIMDE__ENABLE_GCC_VEC_EXT)
-  simde_float64   f64 __attribute__((__vector_size__(16)));
+#if defined(SIMDE_VECTOR_SUBSCRIPT)
+  simde_float64   f64 SIMDE_VECTOR(16) SIMDE_MAY_ALIAS;
 #else
   simde_float64   f64[2];
 #endif

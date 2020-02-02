@@ -27,6 +27,9 @@
 #  endif
 #  include "sse4.1.h"
 
+HEDLEY_DIAGNOSTIC_PUSH
+SIMDE_DISABLE_UNWANTED_DIAGNOSTICS
+
 #  if defined(SIMDE_SSE4_2_NATIVE)
 #    undef SIMDE_SSE4_2_NATIVE
 #  endif
@@ -58,8 +61,14 @@
 #    endif
 #  endif
 
+#  if !defined(SIMDE_SSE4_2_NATIVE) && defined(SIMDE_ENABLE_NATIVE_ALIASES)
+#    define SIMDE_SSE4_2_ENABLE_NATIVE_ALIASES
+#  endif
+
 SIMDE__BEGIN_DECLS
 
 SIMDE__END_DECLS
+
+HEDLEY_DIAGNOSTIC_POP
 
 #endif /* !defined(SIMDE__SSE4_2_H) */

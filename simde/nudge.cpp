@@ -83,7 +83,7 @@ static const unsigned simdv_width32_log2 = 0;
 #error Unsupported NUDGE_SIMDV_WIDTH
 #endif
 
-
+/*
 #if (defined(_WIN32) || defined(SIMDE_NO_NATIVE))
 NUDGE_FORCEINLINE simde__m128 operator - (simde__m128 a) {
 	return simde_mm_xor_ps(a, simde_mm_set1_ps(-0.0f));
@@ -158,6 +158,7 @@ NUDGE_FORCEINLINE simde__m256& operator /= (simde__m256& a, simde__m256 b) {
 }
 #endif
 #endif
+*/
 
 typedef simde__m128 simd4_float;
 typedef simde__m128i simd4_int32;

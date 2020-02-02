@@ -20,14 +20,14 @@ Second, SIMDe makes it easier to write code targeting ISA extensions
 you don't have convenient access to.  You can run NEON code on your
 x86 machine *without an emulator*.  Obviously you'll eventually want
 to test on the actual hardware you're targeting, but for most
-development SIMDe can provide a much easier path.
+development, SIMDe can provide a much easier path.
 
 SIMDe takes a very different approach from most other SIMD abstraction
 layers in that it aims to expose the entire functionality of the
-underlying instruction set.  Instead of limiting functionality to a
+underlying instruction set.  Instead of limiting functionality to the
 lowest common denominator, SIMDe tries to minimize the amount of
-effort required to port while still allowing you the space to optimize as
-needed.
+effort required to port while still allowing you the space to optimize
+as needed.
 
 The current focus is on writing complete portable implementations,
 though a large number of functions already have accelerated
@@ -55,12 +55,14 @@ For an example of a project using SIMDe, see
 There are currently complete implementations of the following instruction
 sets:
 
- * MMX
- * SSE
- * SSE2
- * SSE3
- * SSSE3
- * SSE4.1
+ * [MMX](https://en.wikipedia.org/wiki/MMX_(instruction_set))
+ * [SSE](https://en.wikipedia.org/wiki/Streaming_SIMD_Extensions)
+ * [SSE2](https://en.wikipedia.org/wiki/SSE2)
+ * [SSE3](https://en.wikipedia.org/wiki/SSE3)
+ * [SSSE3](https://en.wikipedia.org/wiki/SSSE3)
+ * [SSE4.1](https://en.wikipedia.org/wiki/SSE4#SSE4.1)
+ * [AVX](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions)
+ * [FMA](https://en.wikipedia.org/wiki/FMA_instruction_set)
 
 As well as partial support for many others; see the
 [instruction-set-support](https://github.com/nemequ/simde/issues?q=is%3Aissue+is%3Aopen+label%3Ainstruction-set-support+sort%3Aupdated-desc)
@@ -68,9 +70,9 @@ label in the issue tracker for details on progress.  If you'd like to
 be notified when an instruction set is available you may subscribe to
 the relevant issue.
 
-If you have a project you're interested in with SIMDe but we don't yet
-support all the functions you need, please file an issue with a list
-of what's missing so we know what to prioritize.
+If you have a project you're interested in using with SIMDe but we
+don't yet support all the functions you need, please file an issue
+with a list of what's missing so we know what to prioritize.
 
 ## Want to help?
 
@@ -78,24 +80,23 @@ There are a *lot* of instructions to get through, so any help would be
 greatly appreciated!  It's pretty straightforward work, and a great
 way to learn about the instructions.
 
-There are three places you'll want to modify in order to implement a
-new function:
-
- * ${arch}/${isax}.h — this is where the implementations live
- * test/${isax}/${isax}.c — tests comparing the implementation with
-   the expected result.
- * test/${arch}/${isax}/compare.c — tests comparing the portable
-   implementation with the "native" version, using random data for
-   inputs.
-
-The comparison test is optional, but very nice to have.  The regular
-tests are required.
-
-Hopefully it's clear what to do by using other functions in those
-files as a template, but if you have trouble please feel free to
-contact us; we're happy to help!
+There is [a
+guide](https://github.com/nemequ/simde/wiki/Implementing-a-New-Function)
+explaining how to add new functions and how to quickly and easily get
+a test case in place.  It's a bit rough right now, but if anything is
+unclear please feel free to use the issue tracker to ask about
+anything you're not clear on.
 
 ## Usage
+
+First, it is important to note that *you do not need two separate
+versions* (one using SIMDe, the other native).  If the native functions
+are available SIMDe will use them, and compilers easily optimize away
+any overhead from SIMDe; all they have to do is some basic inlining.
+`-O2` should be enough, but we strongly recommend `-O3` (or whatever
+flag instructs your compiler to aggressizely optimize) since many of
+the portable fallbacks are substantially faster with aggressive
+auto-vectorization that isn't enabled at lower optimization levels.
 
 Each instruction set has a separate file; `x86/mmx.h` for MMX,
 `x86/sse.h` for SSE, `x86/sse2.h` for SSE2, and so on.  Just include
@@ -104,24 +105,33 @@ provide the fastest implementation it can given which extensions
 you've enabled in your compiler (i.e., if you want to use NEON to
 implement SSE, you'll need to pass something like `-mfpu=neon`).
 
-Symbols are prefixed with `simde_`.  For example, the MMX
-`_mm_add_pi8` intrinsic becomes `simde_mm_add_pi8`, and `__m64`
-becomes `simde__m64`.
+If you define `SIMDE_ENABLE_NATIVE_ALIASES` before including SIMDe
+you can use the same names as the native functions.  Unfortunately,
+this is somewhat error-prone due to portability issues in the APIs, so
+it's recommended to only do this for testing.  When
+`SIMDE_ENABLE_NATIVE_ALIASES` is undefined only the versions prefixed
+with `simde_` will be available; for example, the MMX `_mm_add_pi8`
+intrinsic becomes `simde_mm_add_pi8`, and `__m64` becomes `simde__m64`.
 
 Since SIMDe is meant to be portable, many functions which assume types
 are of a specific size have been altered to use fixed-width types
-instead.  For example, Intel's APIs assume `int` is 32 bits, so
-`simde_mm_set_pi32`'s arguments are `int32_t` instead of `int`.  On
-platforms where the native API's assumptions hold (*i.e.*, if `int`
-really is 32-bits) SIMDe's types should be compatible, so existing
-code needn't be changed unless you're porting to a new platform.
+instead.  For example, Intel's APIs use `char` for signed 8-bit
+integers, but `char` on ARM is generally unsigned.  SIMDe uses `int8_t`
+to make the API portable, but that means your code may require some
+minor changes (such as using `int8_t` instead of `char`) to work on
+other platforms.
 
-For best performance, you should enable OpenMP 4 SIMD support by
-defining `SIMDE_ENABLE_OPENMP` before including any SIMDe headers, and
+That said, the changes are usually quite minor.  It's often enough to
+just use search and replace, manual changes are required pretty
+infrequently.
+
+For best performance, in addition to `-O3` (or whatever your compiler's
+equivalent is), you should enable OpenMP 4 SIMD support by defining
+`SIMDE_ENABLE_OPENMP` before including any SIMDe headers, and
 enabling OpenMP support in your compiler.  GCC and ICC both support a
 flag to enable only OpenMP SIMD support instead of full OpenMP (the
 SIMD support doesn't require the OpenMP run-time library); for GCC the
-flag is `-fopenmp-simd`, for ICC `-openmp-simd`.  SIMDe also supports
+flag is `-fopenmp-simd`, for ICC `-qopenmp-simd`.  SIMDe also supports
 using [Cilk Plus](https://www.cilkplus.org/), [GCC loop-specific
 pragmas](https://gcc.gnu.org/onlinedocs/gcc/Loop-Specific-Pragmas.html),
 or [clang pragma loop hint
@@ -132,7 +142,8 @@ though these are not as well tested.
 
 ### Compilers
 
-SIMDe requires C99.
+SIMDe does depend on some C99 features, though the subset supported by
+MSVC also works.
 
 Every commit is tested with several different versions of GCC, clang,
 and PGI via [Travis CI](https://travis-ci.org/nemequ/simde) on Linux.
@@ -151,8 +162,6 @@ free to use whatever works.
 Currently only x86_64, x86, and ARMv7 receive any sort of regular
 testing.  If you'd like to see more thorough testing of other
 architectures, please consider finding a way to integrate it into CI.
-One example might be running qemu on Travis CI (or some other hosted
-CI).
 
 ## Related Projects
 
@@ -164,11 +173,15 @@ CI).
  * Intel offers an emulator, the [Intel® Software Development
    Emulator](https://software.intel.com/en-us/articles/intel-software-development-emulator/)
    which can be used to develop software which uses Intel intrinsics
-   without having to own hardware which supports them, though AFAIK it
+   without having to own hardware which supports them, though it
    doesn't help for deployment.
- * I'm not aware of anyone else trying to create portable
-   implementations of an instruction set, but there are a few projects
-   trying to implement one set with another:
+ * [Iris](https://github.com/AlexYaruki/iris) is the only other project
+   I'm aware of which is attempting to create portable implementations
+   like SIMDe.  SIMDe is much further along on the Intel side, but Iris
+   looks to be in better shape on ARM.  C++-only, Apache 2.0 license.
+   AFAICT there are no accelerated fallbacks, nor is there a good way to
+   add them since it relies extensively on templates.
+ * There are a few projects trying to implement one set with another:
    * [ARM_NEON_2_x86_SSE](https://github.com/intel/ARM_NEON_2_x86_SSE)
      — implementing NEON using SSE.  Quite extensive, Apache 2.0
      license.
@@ -179,7 +192,7 @@ CI).
      SSE2 using AltiVec/VMX, using a non-free IBM library called
      [powerveclib](https://www.ibm.com/developerworks/community/groups/community/powerveclib/)
    * [SSE-to-NEON](https://github.com/otim/SSE-to-NEON) — implementing
-     SSE with NEON.  Non-free.
+     SSE with NEON.  Non-free, C++.
  * [arm-neon-tests](https://github.com/christophe-lyon/arm-neon-tests)
    contains tests te verify NEON implementations.
 
@@ -190,14 +203,57 @@ know](https://github.com/nemequ/simde/issues/new)!
 
 Sometime features can't be emulated.  If SIMDe is operating in native
 mode the functions will work as expected, but if there is no native
-support the following caveats apply:
+support some caveats apply:
 
-### SSE
+ * x86 / x86_64
+   * SSE
+     * `SIMDE_MM_SET_ROUNDING_MODE()` will use `fesetround()`, altering
+       the global rounding mode.
+     * `simde_mm_getcsr` and `simde_mm_setcsr` only implement bits 13
+       and 14 (rounding mode).
+   * AVX
+     * `simde_mm256_test*` do not set the CF/ZF registers as there is
+       no portable way to implement that functionality.
+     * `simde_mm256_zeroall` and `simde_mm256_zeroupper` are not
+       implemented as there is no portable way to implement that
+       functionality.
 
- * `simde_MM_SET_ROUNDING_MODE()` will use `fesetround()`, altering
-   the global rounding mode.
- * `simde_mm_getcsr` and `simde_mm_setcsr` only implement bits 13 and
-   14 (rounding mode).
+Also, as mentioned earlier, while some APIs make assumptions about
+basic types (*e.g.*, `int` is 32 bits), SIMDe can not so many types
+have been altered to used portable fixed-width versions such as
+`int32_t`.
+
+If you find any other differences, please file an issue so we can either fix
+it or add it to the list above.
+
+## Benefactors
+
+SIMDe uses resources provided for free by a number of organizations.
+While this shouldn't be taken to imply endorsement of SIMDe, we're
+tremendously grateful for their support:
+
+ * [GitHub](https://github.com/) — hosts our source repository, issue
+   tracker, etc.
+ * [Travis CI](https://travis-ci.org/) — provides CI testing on
+   numerous platforms.
+ * [AppVeyor](https://www.appveyor.com/) — provides CI testing on
+   Windows.
+ * [IntegriCloud](https://integricloud.com/) — provides a POWER9 VPS
+   for development.
+ * [CodeCov.io](https://codecov.io/) — provides code coverage analysis
+   for our test cases.
+
+Without such organizations donating resources SIMDe wouldn't be nearly
+as useful or usable as it is today.
+
+We would also like to thank anyone who has helped develop the myriad
+of software on which SIMDe relies, including compilers and analysis
+tools.
+
+Finally, a special thank you to
+[anyone who has contributed](https://github.com/nemequ/simde/graphs/contributors)
+to SIMDe, filed bugs, provided suggestions, or helped with SIMDe
+development in any way.
 
 ## License
 

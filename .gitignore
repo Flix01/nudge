@@ -67,6 +67,8 @@ example/example_no_ffp
 example/example_no_ffp_with_shadows
 example/example_no_ffp_with_shadows_nosimd
 webassembly/
+simde/simde_legacy.7z
+
 
 
 
