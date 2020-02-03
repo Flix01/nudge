@@ -39,8 +39,8 @@
 // SIMD version (it does not work for me):
 // em++ -O2 -D"NUM_SIMULATION_STEPS=1" -D"NUM_SIMULATION_ITERATIONS=5" -D"NUM_BOXES=16" -D"NUM_SPHERES=8" -D"MAX_BODY_COUNT=32" -D"ARENA_SIZE=(128*1024)"  -D"WINDOW_WIDTH=960" -D"WINDOW_HEIGHT=540" -fno-rtti -fno-exceptions -msse2 -o html/nudge_with_shadows.html main_no_ffp_with_shadows.cpp ../nudge.cpp -I"./" -I"../" -s LEGACY_GL_EMULATION=0 -lglut --closure 1
 // Or:
-// SIMDE (SIMD emulated) version (needs emscripten with LLVM-Backend: tested emscripten-upstream-1.13.40):
-// em++ -O3 -DUSE_SIMDE -DSIMDE_NO_NATIVE -fno-rtti -fno-exceptions -D"NUM_SIMULATION_STEPS=1" -D"NUM_SIMULATION_ITERATIONS=5" -D"NUM_BOXES=349" -D"NUM_SPHERES=450" -D"MAX_BODY_COUNT=800" -D"ARENA_SIZE=(1536*1024)" -D"WINDOW_WIDTH=960" -D"WINDOW_HEIGHT=540" -o html/nudge_with_shadows.html main_no_ffp_with_shadows.cpp ../simde/nudge.cpp -I"../simde/simde" -I"../simde" -I"./" -lglut
+// SIMDe (SIMD everywhere) version (needs emscripten with LLVM-Backend: tested emscripten-upstream-1.13.40):
+// em++ -O3 -DUSE_SIMDE -DSIMDE_NO_NATIVE -DSIMDE_ENABLE_OPENMP -fopenmp-simd -fno-rtti -fno-exceptions -D"NUM_SIMULATION_STEPS=1" -D"NUM_SIMULATION_ITERATIONS=5" -D"NUM_BOXES=349" -D"NUM_SPHERES=450" -D"MAX_BODY_COUNT=800" -D"ARENA_SIZE=(1536*1024)" -D"WINDOW_WIDTH=960" -D"WINDOW_HEIGHT=540" -o html/nudge_with_shadows.html main_no_ffp_with_shadows.cpp ../simde/nudge.cpp -I"../simde/simde" -I"../simde" -I"./" -lglut
 // Then run html/nudge_with_shadows.html by using a web server (or with emrun).
 
 // Windows
