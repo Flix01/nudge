@@ -27,7 +27,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifdef _WIN32
+#ifdef __MSC_VER//_WIN32
 #include <intrin.h>
 #define NUDGE_ALIGNED(n) __declspec(align(n))
 #define NUDGE_FORCEINLINE __forceinline
@@ -59,7 +59,7 @@ static const unsigned simdv_width32 = 8;
 static const unsigned simdv_width32_log2 = 3;
 #endif
 
-#ifdef _WIN32
+#ifdef __MSC_VER//_WIN32
 NUDGE_FORCEINLINE __m128 operator - (__m128 a) {
 	return _mm_xor_ps(a, _mm_set1_ps(-0.0f));
 }
@@ -975,7 +975,7 @@ namespace {
 	};
 }
 
-#ifdef _WIN32
+#ifdef __MSC_VER//_WIN32
 static inline unsigned first_set_bit(unsigned x) {
 	unsigned long r = 0;
 	_BitScanForward(&r, x);

@@ -29,22 +29,27 @@
 
 #include "nudge.h"
 #include <assert.h>
-//#include <immintrin.h>
 //#define SIMDE_ENABLE_OPENMP	// -fopenmp-simd
-#include <simde/x86/sse2.h>	// SIMDE library
-//#include <simde/simde-common.h>	// SIMDE library
+#include <simde/x86/sse2.h>	// SIMDE library	(immintrin.h removed)
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
-#ifdef _WIN32
+#ifdef __MSC_VER //_WIN32
+#include <intrin.h>
+#endif
+
+/*#ifdef __MSC_VER //_WIN32
 #include <intrin.h>
 #define NUDGE_ALIGNED(n) __declspec(align(n))
 #define NUDGE_FORCEINLINE __forceinline
 #else
 #define NUDGE_ALIGNED(n) __attribute__((aligned(n)))
 #define NUDGE_FORCEINLINE inline __attribute__((always_inline))
-#endif
+#endif*/
+
+#define NUDGE_ALIGNED(n) SIMDE_ALIGN(n)
+#define NUDGE_FORCEINLINE HEDLEY_ALWAYS_INLINE
 
 /*#ifdef SIMDE_NO_NATIVE
 #define NUDGE_SIMDV_WIDTH 32
@@ -83,8 +88,8 @@ static const unsigned simdv_width32_log2 = 0;
 #error Unsupported NUDGE_SIMDV_WIDTH
 #endif
 
-/*
-#if (defined(_WIN32) || defined(SIMDE_NO_NATIVE))
+
+#ifdef __MSC_VER	// (defined(_WIN32) || defined(SIMDE_NO_NATIVE))
 NUDGE_FORCEINLINE simde__m128 operator - (simde__m128 a) {
 	return simde_mm_xor_ps(a, simde_mm_set1_ps(-0.0f));
 }
@@ -158,7 +163,7 @@ NUDGE_FORCEINLINE simde__m256& operator /= (simde__m256& a, simde__m256 b) {
 }
 #endif
 #endif
-*/
+
 
 typedef simde__m128 simd4_float;
 typedef simde__m128i simd4_int32;
@@ -1064,7 +1069,7 @@ namespace {
 	};
 }
 
-#ifdef _WIN32
+#ifdef __MSC_VER//_WIN32
 static inline unsigned first_set_bit(unsigned x) {
 	unsigned long r = 0;
 	_BitScanForward(&r, x);

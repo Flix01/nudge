@@ -100,14 +100,24 @@
 
 #if (defined(__EMSCRIPTEN__) || (defined(USE_SIMDE) && defined(SIMDE_NO_NATIVE)))
 // No <mm_malloc.h> header in emscripten so far
-static inline void* _mm_malloc (size_t size, size_t alignment)	{
-  void *ptr;
-  if (alignment == 1) return malloc (size);
-  if (alignment == 2 || (sizeof (void *) == 8 && alignment == 4)) alignment = sizeof (void *);
-  if (posix_memalign (&ptr, alignment, size) == 0) return ptr;
-  else return NULL;
+void* _mm_malloc (size_t size, size_t alignment)	{
+#	ifdef _WIN32
+    return _aligned_malloc(size, alignment);
+#	else
+  	void *ptr;
+	if (alignment == 1) return malloc (size);
+	if (alignment == 2 || (sizeof (void *) == 8 && alignment == 4)) alignment = sizeof (void *);
+	if (posix_memalign (&ptr, alignment, size) == 0) return ptr;
+	else return NULL;
+#	endif
 }
-static inline void _mm_free (void * ptr) {free (ptr);}
+void _mm_free (void * ptr) {
+#	if defined(WIN32)
+    _aligned_free(ptr);
+#	else		
+	free (ptr);
+#	endif
+}
 #endif
 
 

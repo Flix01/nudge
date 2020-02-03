@@ -62,6 +62,7 @@ reps/
 *.cfg
 *.ini
 *.exe
+*.dll
 example/example
 example/example_no_ffp
 example/example_no_ffp_with_shadows
