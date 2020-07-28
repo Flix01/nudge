@@ -20,9 +20,27 @@
 // SOFTWARE.
 //
 
+// Modified by Flix [https://github.com/Flix01/nudge]: 
+// -> 	added simde [https://github.com/simd-everywhere/simde] support through 
+//		the NUDGE_USE_SIMDE definition (using SIMDE_ENABLE_NATIVE_ALIASES)
+
+
 #include "nudge.h"
+
 #include <assert.h>
-#include <immintrin.h>
+#ifndef NUDGE_USE_SIMDE
+//#	ifndef __EMSCRIPTEN__
+#		include <immintrin.h>	// everything
+/*#	else
+//#		include <xmmintrin.h>	// sse
+#		include <emmintrin.h>	// sse2
+#	endif*/
+#else
+#	undef SIMDE_ENABLE_NATIVE_ALIASES
+#	define SIMDE_ENABLE_NATIVE_ALIASES	// no need to prefix everything with simde_
+//#   include "./simde/x86/avx2.h"
+#   include "./simde/x86/sse2.h"
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <string.h>

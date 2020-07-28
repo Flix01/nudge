@@ -63,6 +63,7 @@ reps/
 *.ini
 *.exe
 *.dll
+*.7z
 example/example
 example/example_no_ffp
 example/example_no_ffp_with_shadows

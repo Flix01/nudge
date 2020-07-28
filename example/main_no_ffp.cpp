@@ -36,10 +36,21 @@
 
 // Emscripten
 //------------
-// SIMD version (it does not work for me):
-// em++ -O2 -D"NUM_SIMULATION_STEPS=1" -D"NUM_SIMULATION_ITERATIONS=5" -D"NUM_BOXES=16" -D"NUM_SPHERES=8" -D"MAX_BODY_COUNT=32" -D"ARENA_SIZE=(128*1024)"  -D"WINDOW_WIDTH=960" -D"WINDOW_HEIGHT=540" -fno-rtti -fno-exceptions -msse2 -o html/nudge.html main_no_ffp.cpp ../nudge.cpp -I"./" -I"../" -s LEGACY_GL_EMULATION=0 -lglut --closure 1
-// Then run html/nudge.html by using a web server.
-// This demo is not ready for SIMDE (simd emulation) support. Please see "main_no_ffp_with_shadows.cpp" if interested.
+// [A] 	SIMD version (it does not work for me): the docs say emscripten should support x86 SSE2 SIMD.
+//
+// 		From [https://emscripten.org/docs/porting/simd.html#compiling-simd-code-targeting-x86-sse-instruction-set]:
+// 		Emscripten supports compiling existing codebases that use x86 SSE by passing the -msse directive to the compiler, 
+// 		and including the header <xmmintrin.h>. Currently only the SSE1 and SSE2 instruction sets are supported.
+// 
+// 		em++ -O2 -msse -msse2 -D"NUM_SIMULATION_STEPS=1" -D"NUM_SIMULATION_ITERATIONS=5" -D"NUM_BOXES=16" -D"NUM_SPHERES=8" -D"MAX_BODY_COUNT=32" -D"ARENA_SIZE=(128*1024)"  -D"WINDOW_WIDTH=960" -D"WINDOW_HEIGHT=540" -fno-rtti -fno-exceptions -o html/nudge.html main_no_ffp.cpp ../nudge.cpp -I"./" -I"../" -s LEGACY_GL_EMULATION=0 -lglut --closure 1
+// 
+// [B]	SIMDe (SIMD everywhere) version (it works for me)
+//		It needs a recent version of emscripten and simde [https://github.com/simd-everywhere/simde]:
+//
+//		em++ -O3 -DNUDGE_USE_SIMDE -DSIMDE_NO_NATIVE -DSIMDE_ENABLE_OPENMP -fopenmp-simd -fno-rtti -fno-exceptions -D"NUM_SIMULATION_STEPS=1" -D"NUM_SIMULATION_ITERATIONS=5" -D"NUM_BOXES=349" -D"NUM_SPHERES=450" -D"MAX_BODY_COUNT=800" -D"ARENA_SIZE=(1536*1024)" -D"WINDOW_WIDTH=960" -D"WINDOW_HEIGHT=540" -o html/nudge.html main_no_ffp.cpp ../nudge.cpp -I"../../simde/" -I"../" -I"./" -lglut
+//		[-DSIMDE_NO_NATIVE can in theory be replaced by -march=native: it compiles, but then when I run it I always get some crash sooner or later] 
+//
+// Once successfully compiled, run html/nudge.html by using a web server (or with emrun).
 
 // Windows
 //---------
@@ -51,7 +62,11 @@
 
 
 #include <nudge.h>
-#include <immintrin.h>
+#ifdef NUDGE_USE_SIMDE
+# 	include <mm_malloc.h>		// _mm_malloc and _mm_free	[there's a fallback commented out in main_no_ffp_with_shadows.cpp if this header is not present]
+#else
+#	include <immintrin.h>		// _MM_SET_FLUSH_ZERO_MODE and _MM_SET_DENORMALS_ZERO_MODE
+#endif // NUDGE_USE_SIMDE
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

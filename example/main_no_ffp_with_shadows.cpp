@@ -36,12 +36,21 @@
 
 // Emscripten
 //------------
-// SIMD version (it does not work for me):
-// em++ -O2 -D"NUM_SIMULATION_STEPS=1" -D"NUM_SIMULATION_ITERATIONS=5" -D"NUM_BOXES=16" -D"NUM_SPHERES=8" -D"MAX_BODY_COUNT=32" -D"ARENA_SIZE=(128*1024)"  -D"WINDOW_WIDTH=960" -D"WINDOW_HEIGHT=540" -fno-rtti -fno-exceptions -msse2 -o html/nudge_with_shadows.html main_no_ffp_with_shadows.cpp ../nudge.cpp -I"./" -I"../" -s LEGACY_GL_EMULATION=0 -lglut --closure 1
-// Or:
-// SIMDe (SIMD everywhere) version (needs emscripten with LLVM-Backend: tested emscripten-upstream-1.13.40):
-// em++ -O3 -DUSE_SIMDE -DSIMDE_NO_NATIVE -DSIMDE_ENABLE_OPENMP -fopenmp-simd -fno-rtti -fno-exceptions -D"NUM_SIMULATION_STEPS=1" -D"NUM_SIMULATION_ITERATIONS=5" -D"NUM_BOXES=349" -D"NUM_SPHERES=450" -D"MAX_BODY_COUNT=800" -D"ARENA_SIZE=(1536*1024)" -D"WINDOW_WIDTH=960" -D"WINDOW_HEIGHT=540" -o html/nudge_with_shadows.html main_no_ffp_with_shadows.cpp ../simde/nudge.cpp -I"../simde/simde" -I"../simde" -I"./" -lglut
-// Then run html/nudge_with_shadows.html by using a web server (or with emrun).
+// [A] 	SIMD version (it does not work for me): the docs say emscripten should support x86 SSE2 SIMD.
+//
+// 		From [https://emscripten.org/docs/porting/simd.html#compiling-simd-code-targeting-x86-sse-instruction-set]:
+// 		Emscripten supports compiling existing codebases that use x86 SSE by passing the -msse directive to the compiler, 
+// 		and including the header <xmmintrin.h>. Currently only the SSE1 and SSE2 instruction sets are supported.
+// 
+// 		em++ -O2 -msse -msse2 -D"NUM_SIMULATION_STEPS=1" -D"NUM_SIMULATION_ITERATIONS=5" -D"NUM_BOXES=16" -D"NUM_SPHERES=8" -D"MAX_BODY_COUNT=32" -D"ARENA_SIZE=(128*1024)"  -D"WINDOW_WIDTH=960" -D"WINDOW_HEIGHT=540" -fno-rtti -fno-exceptions -o html/nudge_with_shadows.html main_no_ffp_with_shadows.cpp ../nudge.cpp -I"./" -I"../" -s LEGACY_GL_EMULATION=0 -lglut --closure 1
+// 
+// [B]	SIMDe (SIMD everywhere) version (it works for me)
+//		It needs a recent version of emscripten and simde [https://github.com/simd-everywhere/simde]:
+//
+//		em++ -O3 -DNUDGE_USE_SIMDE -DSIMDE_NO_NATIVE -DSIMDE_ENABLE_OPENMP -fopenmp-simd -fno-rtti -fno-exceptions -D"NUM_SIMULATION_STEPS=1" -D"NUM_SIMULATION_ITERATIONS=5" -D"NUM_BOXES=349" -D"NUM_SPHERES=450" -D"MAX_BODY_COUNT=800" -D"ARENA_SIZE=(1536*1024)" -D"WINDOW_WIDTH=960" -D"WINDOW_HEIGHT=540" -o html/nudge_with_shadows.html main_no_ffp_with_shadows.cpp ../nudge.cpp -I"../../simde/" -I"../" -I"./" -lglut
+//		[-DSIMDE_NO_NATIVE can in theory be replaced by -march=native: it compiles, but then when I run it I always get some crash sooner or later] 
+//
+// Once successfully compiled, run html/nudge_with_shadows.html by using a web server (or with emrun).
 
 // Windows
 //---------
@@ -53,17 +62,13 @@
 
 
 #include <nudge.h>
-#ifndef USE_SIMDE
-//#	ifndef __EMSCRIPTEN__
-#		include <immintrin.h>
-//#	else
-//#		include <wasm_simd128.h>
-//#	endif
-#else // USE_SIMDE
-//#	define SIMDE_ENABLE_OPENMP	// -fopenmp-simd
-#	include <simde/x86/sse2.h>	// SIMDE library
-//#	include <simde/simde-common.h>	// SIMDE library
-#endif // USE_SIMDE
+
+#ifdef NUDGE_USE_SIMDE
+# 	include <mm_malloc.h>		// _mm_malloc and _mm_free	[there's a fallback commented out below if this header is not present]
+#else
+#	include <immintrin.h>		// _MM_SET_FLUSH_ZERO_MODE and _MM_SET_DENORMALS_ZERO_MODE
+#endif // NUDGE_USE_SIMDE
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -98,7 +103,7 @@
 #	include <GL/gl.h>
 #endif
 
-#if (defined(__EMSCRIPTEN__) || (defined(USE_SIMDE) && defined(SIMDE_NO_NATIVE)))
+/*#if (defined(__EMSCRIPTEN__) || (defined(NUDGE_USE_SIMDE) && defined(SIMDE_NO_NATIVE)))
 // No <mm_malloc.h> header in emscripten so far
 void* _mm_malloc (size_t size, size_t alignment)	{
 #	ifdef _WIN32
@@ -118,7 +123,7 @@ void _mm_free (void * ptr) {
 	free (ptr);
 #	endif
 }
-#endif
+#endif*/
 
 
 #ifndef M_PI
@@ -192,6 +197,7 @@ static nudge::ContactData contact_data;
 static nudge::ContactCache contact_cache;
 static nudge::ActiveBodies active_bodies;
 
+// is this nm_QuatMul ?
 static inline void quaternion_concat(float r[4], const float a[4], const float b[4]) {
 	r[0] = b[0]*a[3] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1];
 	r[1] = b[1]*a[3] + a[1]*b[3] + a[2]*b[0] - a[0]*b[2];
@@ -199,6 +205,7 @@ static inline void quaternion_concat(float r[4], const float a[4], const float b
 	r[3] = a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2];
 }
 
+// is this nm_QuatMulVec3 ?
 static inline void quaternion_transform(float r[3], const float a[4], const float b[3]) {
 	float t[3];
 	t[0] = a[1]*b[2] - a[2]*b[1];
@@ -214,6 +221,7 @@ static inline void quaternion_transform(float r[3], const float a[4], const floa
 	r[2] = b[2] + a[3]*t[2] + a[0]*t[1] - a[1]*t[0];
 }
 
+// is this nm_Mat4FromQRotScaTra ?
 static inline void matrix(float r[16], const float s[3], const float q[4], const float t[3]) {
 	float kx = q[0] + q[0];
 	float ky = q[1] + q[1];
@@ -518,76 +526,6 @@ static void render() {
         const float y = pMatrixFarPlane*tan(pMatrixFovDeg*3.1415/180.0)*0.35f;  // last coefficient is ad-hoc for this demo (in our case it should be 1.0, or maybe 0.5 for free roaming; something like 0.2 for fixed environment and MUCH better shadow quality!)
         const float x = y;
         nuOrtho(lpMatrix,-x,x,-y,y,pMatrixFarPlane*0.5f,-pMatrixFarPlane*0.5f);
-/* POSSIBLE IMPROVEMENTS (https://msdn.microsoft.com/en-us/library/windows/desktop/ee416324(v=vs.85).aspx):
- To calculate the projection, the eight points that make up the view
- frustum are transformed into light space. Next, the minimum and maximum
- values in X and Z are found. These values make up the bounds for an
- orthographic projection [-x,x,-y,y].
-
- For directional lights, the solution to the moving shadow edges problem is to round the minimum/maximum value in X and Y (that make up the orthographic projection bounds) to pixel size increments. This can be done with a divide operation, a floor operation, and a multiply.
-    vLightCameraOrthographicMin /= vWorldUnitsPerTexel;
-    vLightCameraOrthographicMin = XMVectorFloor( vLightCameraOrthographicMin );
-    vLightCameraOrthographicMin *= vWorldUnitsPerTexel;
-    vLightCameraOrthographicMax /= vWorldUnitsPerTexel;
-    vLightCameraOrthographicMax = XMVectorFloor( vLightCameraOrthographicMax );
-    vLightCameraOrthographicMax *= vWorldUnitsPerTexel;
-
- The vWorldUnitsPerTexel value is calculated by taking a bound of
- the view frustum, and dividing by the buffer size.
-
-        FLOAT fWorldUnitsPerTexel = fCascadeBound /
-        (float)m_CopyOfCascadeConfig.m_iBufferSize;
-        vWorldUnitsPerTexel = XMVectorSet( fWorldUnitsPerTexel, fWorldUnitsPerTexel, 						   	0.0f, 0.0f );
-
-Bounding the maximum size of the view frustum results in a looser fit for the orthographic projection.
-It is important to note that the texture is 1 pixel larger in width and height when using this technique. This keeps shadow coordinates from indexing outside of the shadow map.
-
-*/
-/*
-Building the matrix:
-
-How I'd go about the very simple case you have:
-You have an orthographic projection for your light-camera. So your frustum is just an Oriented Bounding Box (OBB). That means you can simply feed its world space coordinates (like the width and height) to glm::ortho().
-
-But how do you construct the OBB around the frustum?
-Good question. ;D
-
-Here's a simple approach:
-First determine the direction of your light (as a normalized vector). Now simply project every vertex of your main-camera's frustum onto that vector and find the nearest and furthest one (simply store the distances along the vector). Now subtract the two distances.
-Congratulations! You already have your OBB's depth (Z).
-Now repeat that process for the other two vectors. One pointing upwards or downwards (Y) and the other to the right or left (X) relative to your light-camera. Now you have your OBB's orientation (the three vectors) and dimensions. Now simply pass the OBB's dimensions to glm::ortho() and then transform the orthographic matrix so it has the same orientation as your OBB.
-You're done. :D
-
-Projecting a point onto a vector:
-This step is actually very easy. Just take the dot product between your vector and your point (both stored as vec3).
-Example code:
-
-float distance_on_vector = dot(p, vector);
-
-Vector should be normalized, because you need the world-space distance. You don't need the actual position of p in world space (you just need the projected length) to calculate the dimensions of the OBB. That's why the above code is enough.
-*/
-// https://gamedev.stackexchange.com/questions/73851/how-do-i-fit-the-camera-frustum-inside-directional-light-space
-/*
-    Calculate the 8 corners of the view frustum in world space. This can be done by using the inverse view-projection matrix to transform the 8 corners of the NDC cube (which in OpenGL is [‒1, 1] along each axis).
-
-    Transform the frustum corners to a space aligned with the shadow map axes. This would commonly be the directional light object's local space. (In fact, steps 1 and 2 can be done in one step by combining the inverse view-projection matrix of the camera with the inverse world matrix of the light.)
-
-    Calculate the bounding box of the transformed frustum corners. This will be the view frustum for the shadow map.
-
-    Pass the bounding box's extents to glOrtho or similar to set up the orthographic projection matrix for the shadow map.
-
-There are a couple caveats with this basic approach. First, the Z bounds for the shadow map will be tightly fit around the view frustum, which means that objects outside the view frustum, but between the view frustum and the light, may fall outside the shadow frustum. This could lead to missing shadows. To fix this, depth clamping can be enabled so that objects in front of the shadow frustum will be rendered with clamped Z instead of clipped. Alternatively, the Z-near of the shadow frustum can be pushed out to ensure any possible shadowers are included.
-
-The bigger issue is that this produces a shadow frustum that continuously changes size and position as the camera moves around. This leads to shadows "swimming", which is a very distracting artifact. In order to fix this, it's common to do the following additional two steps:
-
-    Fix the overall size of the frustum based on the longest diagonal of the camera frustum. This ensures that the camera frustum can fit into the shadow frustum in any orientation. Don't allow the shadow frustum to change size as the camera rotates.
-
-    Discretize the position of the frustum, based on the size of texels in the shadow map. In other words, if the shadow map is 1024×1024, then you only allow the frustum to move around in discrete steps of 1/1024th of the frustum size. (You also need to increase the size of the frustum by a factor of 1024/1023, to give room for the shadow frustum and view frustum to slip against each other.)
-
-If you do these, the shadow will remain rock solid in world space as the camera moves around. (It won't remain solid if the camera's FOV, near or far planes are changed, though.)
-
-As a bonus, if you do all the above, you're well on your way to implementing cascaded shadow maps, which are "just" a set of shadow maps calculated from the view frustum as above, but using different view frustum near and far plane values to place each shadow map.
-*/
     }
     if (lvMatrix[15]==0)
     {
@@ -605,8 +543,6 @@ As a bonus, if you do all the above, you're well on your way to implementing cas
 
     Teapot_HiLevel_DrawMulti_ShadowMap_Vp(pMeshData,numMeshData,lvpMatrix,0.5f);
     //Teapot_HiLevel_DrawMulti_ShadowMap_Vp_WithFrustumCulling(pMeshData,numMeshData,lvpMatrix,lvpMatrixFrustum,0.5f);
-
-
     }
 #   endif //TEAPOT_SHADER_USE_SHADOW_MAP
 
@@ -810,16 +746,12 @@ static void GlutIdle(void)			{glutPostRedisplay();}
 static void GlutFakeDrawGL(void) 	{glutDisplayFunc(GlutDrawGL);}
 
 int main(int argc, const char* argv[]) {
-#if (!defined(__EMSCRIPTEN__) && !defined(USE_SIMDE))	// TODO: #if (defined(__EMSCRIPTEN__) || (defined(USE_SIMDE) && defined(SIMDE_SSE_NO_NATIVE)))
 	// Disable denormals for performance.
-#ifndef USE_SIMDE
+#ifndef NUDGE_USE_SIMDE
     _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
     _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
-#else //USE_SIMDE
-    SIMDE_MM_SET_FLUSH_ZERO_MODE(SIMDE_MM_FLUSH_ZERO_ON);
-    SIMDE_MM_SET_DENORMALS_ZERO_MODE(SIMDE_MM_DENORMALS_ZERO_ON);
-#endif //USE_SIMDE
-#endif //__EMSCRIPTEN__	
+#endif //NUDGE_USE_SIMDE
+	
 
 	// Print information about instruction set.
 #ifdef __AVX2__
@@ -876,7 +808,7 @@ int main(int argc, const char* argv[]) {
 	glutInit(&argc, const_cast<char**>(argv));
 	glutInitDisplayMode(GLUT_RGBA | GLUT_DEPTH | GLUT_DOUBLE);
 	glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
-#	ifndef USE_SIMDE
+#	ifndef NUDGE_USE_SIMDE
     glutCreateWindow("nudge_no_ffp_with_shadows");
 #	else
 	glutCreateWindow("nudge_no_ffp_with_shadows_nosimd");
@@ -1015,7 +947,7 @@ int main(int argc, const char* argv[]) {
     glutIdleFunc(GlutIdle);
     glutReshapeFunc(resize);
 
-#	ifdef USE_SIMDE
+#	ifdef NUDGE_USE_SIMDE
 	printf("\nUSING SIMDE (simd emulation).\n");
 #		ifdef SIMDE_AVX2_NATIVE
 		printf("SIMDE: SIMDE_AVX2_NATIVE is defined.\n");

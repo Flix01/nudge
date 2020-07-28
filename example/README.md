@@ -14,7 +14,7 @@ In this folder are present:
 
 ![example](./screenshots/example_no_ffp_with_shadows.gif)
 
-<b>main_no_ffp_with_shadows.cpp (emscripten-upstream-1.13.40) (here with 800 rigid bodies):</b> 
+<b>main_no_ffp_with_shadows.cpp (emscripten-1.39.14) (here with 800 rigid bodies):</b> 
 
 <img src="./screenshots/example_no_ffp_with_shadows_emscripten.png" width="250">
 
@@ -39,7 +39,7 @@ It uses teapot.h and dynamic_resolution.h from https://github.com/Flix01/Header-
 
 Compilation instructions are at the top of the file. 
 
-- This demo can also be compiled with the simd-emulated version of nudge, slower but good for emscripten builds (a .html is present in the html subfolder, and can be run locally using a webserver, or emrun).
+- This demo can also be compiled with emscripten (a .html is present in the html subfolder, and can be run locally using a webserver, or emrun).
 
 
 
