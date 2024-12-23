@@ -1,0 +1,22 @@
+# Doxyfile 1.8.20
+
+# Project related configuration options
+PROJECT_NAME           = "Nudge Physics"
+PROJECT_BRIEF          = "A single file, header-only 3D physics library"
+#PROJECT_LOGO           = "path/to/logo.png"  # Optional: path to a logo image
+OUTPUT_DIRECTORY       = doc  # Output directory for generated documentation
+INPUT                  = nudge.h # Adjusted path to source files
+FILE_PATTERNS          = *.h
+RECURSIVE              = NO
+EXTRACT_ALL            = YES
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HTML_HEADER            = 
+HTML_FOOTER            = 
+HTML_EXTRA_FILES       = 
+
+# Doxygen options
+GENERATE_TREEVIEW      = YES
+QUIET                  = NO
+WARN_IF_UNDOCUMENTED   = YES
+
