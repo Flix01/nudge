@@ -20,11 +20,10 @@
 // SOFTWARE.
 //
 
-// Slightly modified by Flix01 in 2020
 
 // Modified by Flix01 (https://github.com/Flix01/nudge/tree/master/new_version) in 2024
 // [I'm not a physics engine expert at all, the mods I've made are just to ease my usage scenario]
-// [Same stuff: I've also probably decreased performance and broken something, so if you're a
+// [I've also probably decreased performance and broken something, so if you're a
 // physics engine expert, I suggest you base your mods on the original version]
 
 /**
@@ -285,15 +284,15 @@ namespace nudge {
      */
     enum BodyFlagEnum {
         BF_HAS_COM_OFFSET = 1<<0, /**< read-only [internal usage: automatically set when bodies are created] */
-        BF_IS_CHARACTER = 1<<2, /**< [unused, not implemented] flag added for user convenience */
-        BF_IS_PLATFORM = 1<<3,  /**< [unused, not implemented] flag added for user convenience */
-        BF_IS_DISABLED = 1<<4,  /**< [experimental] if used, it's better to set the body to static, reset its velocities and set its collision group and mask both to zero */
-        BF_IS_REMOVED = 1<<5,   /**< read-only [internal flag added when bodies are removed] */
+        BF_IS_CHARACTER = 1<<1, /**< [unused, not implemented] flag added for user convenience */
+        BF_IS_PLATFORM = 1<<2,  /**< [unused, not implemented] flag added for user convenience */
+        BF_IS_DISABLED = 1<<3,  /**< [experimental] if used, it's better to set the body to static, reset its velocities and set its collision group and mask both to zero */
+        BF_IS_REMOVED = 1<<4,   /**< read-only [internal flag added when bodies are removed] */
         BF_IS_DISABLED_OR_REMOVED = BF_IS_DISABLED|BF_IS_REMOVED,   /**< read-only flag useful to filter out bodies excluded from simulation */
-        BF_IS_STATIC = 1<<6,    /**< read-only [internal flag added when bodies are added] */
-        BF_IS_KINEMATIC = 1<<7, /**< read-only [internal flag added when bodies are added] */
-        BF_IS_DYNAMIC = 1<<8,    /**< read-only [internal flag added when bodies are added] */
-        BF_NEVER_SLEEPING = 1<<9, /**< [experimental] [do NOT use] */
+        BF_IS_STATIC = 1<<5,    /**< read-only [internal flag added when bodies are added] */
+        BF_IS_KINEMATIC = 1<<6, /**< read-only [internal flag added when bodies are added] */
+        BF_IS_DYNAMIC = 1<<7,    /**< read-only [internal flag added when bodies are added] */
+        BF_NEVER_SLEEPING = 1<<8, /**< [experimental] [do NOT use] */
         BF_IS_STATIC_OR_KINEMATIC = BF_IS_STATIC|BF_IS_KINEMATIC,   /**< read-only [internal flag] */
         BF_IS_STATIC_OR_DYNAMIC = BF_IS_STATIC|BF_IS_DYNAMIC,   /**< read-only [internal flag] */
         BF_IS_KINEMATIC_OR_DYNAMIC = BF_IS_KINEMATIC|BF_IS_DYNAMIC,   /**< read-only [internal flag] */
@@ -602,7 +601,7 @@ namespace nudge {
      */
     void TransformToMat4(float* matrix16Out,const Transform* T);
     /**
-     * @brief TransformAssignToBody Assigns a new Transform to a body, and sets its linear and angular velocities based on the differences between the new transform and the old one: this is essential when manually moving kinematic objects.
+     * @brief TransformAssignToBody Assigns a new Transform to a body, and sets its linear and angular velocities based on the differences between the new transform and the old one: this is essential when manually moving bodies by changing their transform.
      * @param c the nudge context
      * @param body the target body index
      * @param newT the new transform
@@ -2863,7 +2862,7 @@ void init_context_with(context_t* c,unsigned MAX_NUM_BOXES,unsigned MAX_NUM_SPHE
 #       define NUDGE_ARENA_SIZE_ALIGNMENT (4096)      // is this correct? Isn't 4096 too much?
 #   endif
     c->arena.size = NUDGE_ARENA_SIZE_MACRO(NUDGE_MAX_NUM_BODIES);
-    c->arena.data = _mm_malloc(c->arena.size, NUDGE_ARENA_SIZE_ALIGNMENT);memset(c->arena.data,0,c->arena.size);
+    c->arena.data = _mm_malloc(c->arena.size, NUDGE_ARENA_SIZE_ALIGNMENT);//memset(c->arena.data,0,c->arena.size);
 
     // Allocate memory for bodies, colliders, and contacts.
     c->active_bodies.capacity = NUDGE_MAX_NUM_BODIES;
@@ -3282,7 +3281,8 @@ void finalize_removed_bodies(context_t* c) {
 #   define TEST_NUDGE_COLLIDER_TAGS_INTEGRITY   // TO REMOVE
 #   ifdef TEST_NUDGE_COLLIDER_TAGS_INTEGRITY
     {
-        uint8_t tagsMap[c->MAX_NUM_BOXES+c->MAX_NUM_SPHERES] = {};
+        uint8_t tagsMap[c->MAX_NUM_BOXES+c->MAX_NUM_SPHERES];// = {};  // VLAs are a clang extension
+        memset(tagsMap,0,(c->MAX_NUM_BOXES+c->MAX_NUM_SPHERES)*sizeof(uint8_t));
         for (unsigned i=0;i<c->MAX_NUM_BOXES;i++) {
             const uint16_t tag = c->colliders.boxes.tags[i];
             assert(tag<c->MAX_NUM_BOXES);
@@ -5995,8 +5995,8 @@ NUDGE_FORCEINLINE static void store8(float* data, const T* indices,
 #   define NUDGE_INTERNAL_CSBM ||   /* consistent mode (like in Bullet): no collision only if A don't want to collide with B and B don't want to collide with A */
 #endif
 
-#ifndef NUDGE_COLLIDE_SKIP_BODIES_MACRO
-// original code (works)
+#ifndef NUDGE_COLLIDE_SKIP_BODYFILTERS_MACRO
+// original code (used to works when macro was NUDGE_COLLIDE_SKIP_BODIES_MACRO)
 //#define NUDGE_COLLIDE_SKIP_BODIES_MACRO(A,B)    (!(A) || !(B)) // Body 0 is the static world and is ignored (original code).
 // no-op (works)
 //#define NUDGE_COLLIDE_SKIP_BODIES_MACRO(A,B)    (0) /* no-op */
@@ -6012,18 +6012,10 @@ NUDGE_FORCEINLINE static void store8(float* data, const T* indices,
 #define NUDGE_COLLIDE_SKIP_BODYFILTERS_MACRO(a,b)  \
     ( \
         ((a)->flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED && (b)->flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED) /* if no body is dynamic we can skip. */ \
-        || (((a)->flags&BF_IS_DISABLED_OR_REMOVED) || ((b)->flags&BF_IS_DISABLED_OR_REMOVED)) /* not sure about this line */ \
+        || (((a)->flags&BF_IS_DISABLED_OR_REMOVED) || ((b)->flags&BF_IS_DISABLED_OR_REMOVED)) /* if one body is disabled or has been removed we can skip */ \
         || (!(((a)->collision_group&(b)->collision_mask) NUDGE_INTERNAL_CSBM ((b)->collision_group&(a)->collision_mask))) \
     )
-#endif //NUDGE_COLLIDE_SKIP_BODIES_MACRO
-/*#define NUDGE_COLLIDE_SKIP_BODIES_MACRO(A,B)  \
-    ( \
-        (c->bodies.flags[(A)]&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED && c->bodies.flags[(B)]&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED) \
-        || ((c->bodies.flags[(A)]&BF_IS_DISABLED_OR_REMOVED) || (c->bodies.flags[(B)]&BF_IS_DISABLED_OR_REMOVED))  \
-        || (!((c->bodies.collision_groups[(A)]&c->bodies.collision_masks[(B)]) NUDGE_INTERNAL_CSBM (c->bodies.collision_groups[(B)]&c->bodies.collision_masks[(A)]))) \
-    )
-#endif //NUDGE_COLLIDE_SKIP_BODIES_MACRO*/
-
+#endif //NUDGE_COLLIDE_SKIP_BODYFILTERS_MACRO
 
 void collide(context_t* c,BodyConnections body_connections)  {
     assert(c);
@@ -6691,7 +6683,8 @@ void collide(context_t* c,BodyConnections body_connections)  {
         memset(sets, 0xff, sizeof(sets[0])*bodies.count);
 
         for (unsigned i = 0 /* was 1 */; i < bodies.count; ++i) {
-            if (bodies.filters[i].flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED) continue; // new
+            //if (bodies.filters[i].flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED) continue; // new
+            if (bodies.filters[i].flags&BF_IS_DISABLED_OR_REMOVED) continue;
             unsigned root = parents[i];
 
             for (unsigned parent = root; parent != 0xffff; parent = parents[root])
@@ -6714,7 +6707,8 @@ void collide(context_t* c,BodyConnections body_connections)  {
 
         for (unsigned i = 0 /* was 1 */; i < bodies.count; ++i) {
             if (bodies.filters[i].idle_counter != 0xff
-                    && !(c->bodies.filters[i].flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED)    // new
+                    //&& !(c->bodies.filters[i].flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED)    // new
+                    && !(c->bodies.filters[i].flags&BF_IS_DISABLED_OR_REMOVED)
                     )
                 active[sets[i]] = 1;
         }
@@ -7011,7 +7005,8 @@ void collide(context_t* c,BodyConnections body_connections)  {
         memset(sets, 0xff, sizeof(sets[0])*bodies.count);
 
         for (unsigned i = 0 /* was 1 */; i < bodies.count; ++i) {
-            if (bodies.filters[i].flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED) continue; // new
+            //if (bodies.filters[i].flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED) continue; // new
+            if (bodies.filters[i].flags&BF_IS_DISABLED_OR_REMOVED) continue;
             unsigned root = parents[i];
 
             for (unsigned parent = root; parent != 0xffff; parent = parents[root])
@@ -7034,14 +7029,16 @@ void collide(context_t* c,BodyConnections body_connections)  {
 
         for (unsigned i = 0 /* was 1 */; i < bodies.count; ++i) {
             if (bodies.filters[i].idle_counter != 0xff
-                    && !(bodies.filters[i].flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED)    // new
+                    //&& !(bodies.filters[i].flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED)    // new
+                    && !(bodies.filters[i].flags&BF_IS_DISABLED_OR_REMOVED)    // new
                     )
                 active[sets[i]] = 1;
         }
 
         // Determine active bodies.
         for (unsigned i = 0 /* was 1 */; i < bodies.count; ++i) {
-            if (bodies.filters[i].flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED)  continue;  // new
+            //if (bodies.filters[i].flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED)  continue;  // new
+            if (bodies.filters[i].flags&BF_IS_DISABLED_OR_REMOVED)  continue;  // new
             unsigned set = sets[i];
 
             if (active[set])

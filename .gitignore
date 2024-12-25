@@ -64,12 +64,19 @@ reps/
 *.exe
 *.dll
 *.7z
+example/html
+example/linux/example
 example/example
 example/example_no_ffp
 example/example_no_ffp_with_shadows
 example/example_no_ffp_with_shadows_nosimd
 webassembly/
 simde/simde_legacy.7z
+new_version/reps
+new_version/doc
+new_version/example/example01
+new_version/example/linux/example
+
 
 
 

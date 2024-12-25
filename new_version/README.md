@@ -50,7 +50,7 @@ int main() {
         // Update simulation
         const unsigned substeps = pre_simulation_step(&c, elapsed_time_from_previous_frame_in_seconds);   // mandatory call (substeps are the number of physic frames that are going to be performed in simulation_step(...))
         if (substeps > 0) {
-            // here you can move manually kinematic bodies for example
+            // here you can move manually kinematic bodies for example, using nudge::TransformAssignToBody(...)
         }
         simulation_step(&c);  // mandatory call (main function of the library)
 
@@ -99,4 +99,5 @@ Extending the physics-related stuff is not a purpose of this work.
 If you have some experience in physics-engine programming, maybe you could try extending the original version: it allows some extension possibility even in the example code (without touching `nudge.h` at all)!  
 Also, it might be helpful to read this (old) [link](https://rasmusbarr.github.io/blog/dod-physics.html) from the original author.
 
-</details>TODO
+</details>
+
