@@ -17,6 +17,14 @@ This 2024 version ([GitHub](https://github.com/Flix01/nudge/tree/master/new_vers
 - Kinematic animation support
 - Doxygen documentation
 
+## Building
+- Being a header-only library, all that is required is to define **NUDGE_IMPLEMENTATION** in a .cpp file before including _"nudge.h"_
+- The library works only with SIMD enabled: the recommended requirements are **AVX2** and **FMA**; the minimum requirement is just **SSE2** (AFAIR). In many cases adding something like _--march=native_ in the compiler options is enough (in g++/clang++ syntax): _-march=haswell_ is probably better for independent builds.
+- **note** Running a SIMD-compiled program on hardware where SIMD is not supported is likely to cause RANDOM CRASHES.
+- **note** When using **emscripten**, _-msimd128_ must be added to the other command-line (simd) options (please read  [HERE](https://emscripten.org/docs/porting/simd.html)). However not all browsers support SIMD by default (without activating it someway): that's one of the main reasons of random crashes inside browsers.
+- **note** The [SIMDE](https://github.com/simd-everywhere/simde) library can be used to compile and run nudge replacing or removing SIMD support. One way to remove SIMD (through SIMDE) is to replace the SIMD compilation options with (g++/clang syntax): _-DUSE_SIMDE -DSIMDE_NO_NATIVE_ (optionally with: _-DSIMDE_ENABLE_OPENMP -fopenmp-simd_) [TODO: check if this still works] (of course there's a performance penalty).
+- The library documentation (recommended) can be generated with the **doxygen** command launched from the same folder as the _Doxyfile_ file
+ 
 ## Usage
 
 ### Getting Started
@@ -79,7 +87,7 @@ int main() {
 
 ## FAQ
 <details>
-<summary><B>The sample application is crashing. Why?</B></summary>
+<summary><b>The sample application is crashing. Why?</b></summary>
 
 &nbsp;
 Most likely, your CPU doesn't support AVX2 and/or FMA. The project files are set to compile with AVX2 and FMA support and you need to disable it in build settings.
@@ -89,7 +97,7 @@ Most likely, your CPU doesn't support AVX2 and/or FMA. The project files are set
 </details>
 
 <details>
-<summary><B>How can I add other colliders (i.e. collision shapes), so that I can use height maps, convex and concave meshes, cylinders, capsules, etc.? And how can I add constraints between bodies?</B></summary>
+<summary><b>How can I add other colliders (i.e. collision shapes), so that I can use height maps, convex and concave meshes, cylinders, capsules, etc.? And how can I add constraints between bodies?</b></summary>
 
 &nbsp;
 ...I suggest you use another physics library!  
@@ -100,4 +108,24 @@ If you have some experience in physics-engine programming, maybe you could try e
 Also, it might be helpful to read this (old) [link](https://rasmusbarr.github.io/blog/dod-physics.html) from the original author.
 
 </details>
+
+<details>
+<summary><b>How do collision masks work?</b></summary>
+
+&nbsp;
+Well, the way collision groups and masks are implemented is very efficient, but a bit difficult to understand, because it allows incoherent conditions.
+Every body belongs to a single collision group, and owns a collision mask of all the groups the body should collide with. An example of incoherent condition if the following:
+```cpp
+// c nudge context ptr
+unsigned a,b;  // set these to 2 body indices
+// we could have used 'body_set_collision_group_and_mask(...)' here:
+c->bodies.filters[a].collision_group = nudge::COLLISION_GROUP_A;c->bodies.filters[a].collision_mask = nudge::COLLISION_GROUP_ALL&(~nudge::COLLISION_GROUP_B);
+c->bodies.filters[b].collision_group = nudge::COLLISION_GROUP_B;c->bodies.filters[b].collision_mask = nudge::COLLISION_GROUP_ALL;
+// => a doesn't want to collide with b, but b wants to collide with a
+```
+How incoherent conditions are handled depends on the optional definition **NUDGE_COLLISION_MASKS_CONSISTENT** (undefined by default, can be defined before the NUDGE_IMPLEMENTATION definition).
+By default, in the code above, a and b do not collide AFAIR. Please note that by always using coherent conditions, collision behavior should not depend on the NUDGE_COLLISION_MASKS_CONSISTENT definition at all.
+
+</details>
+
 
