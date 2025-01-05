@@ -415,8 +415,7 @@ namespace nudge {
     /**
      * @brief The KinematicData is composed by two arrays: an array of global key frames and an array of animations.
      * Each animation owns a (kinematic) body index and a range of key frames.
-     * @note Kinematic animations are just used to automatically move kinematic bodies. Each range of key frames can
-     * be used by more than one Animation (i.e. body), because each Animation can have an offset transform (baseT) and/or an offset time (offset_time).
+     * @note Kinematic animations are just used to automatically move kinematic bodies. Each range of key frames can be used by more than one Animation (i.e. body), because each Animation can have an offset transform (baseT) and/or an offset time (offset_time).
      * @note All the times are intended in seconds, and AFAIR (TOCHECK) they represent the (relative) time to get to the current key frame.
      */
     struct KinematicData  {
@@ -426,18 +425,19 @@ namespace nudge {
          * @brief TimeMode enum
          */
         enum TimeMode {
-            TM_NORMAL,      /**< uniform speed across the transforms */
+            TM_NORMAL=0,    /**< uniform speed across the transforms */
             TM_ACCELERATE,  /**< accelerated speed across the transforms */
             TM_DECELERATE   /**< decelerated speed across the transforms */
-        }* key_frame_modes; /**< array of size key_frame_count of TimeMode enums  */
+        }* key_frame_modes; /**< array of size key_frame_count of TimeMode enums (experimental, it can probably be completely ignored in most cases) */
         uint32_t key_frame_capacity;    /**< the number of key frames the arrays can contain (use \ref kinematic_data_reserve_key_frames "kinematic_data_reserve_key_frames(...)" to increase it) */
         uint32_t key_frame_count;      /**< the number of inserted key frames */
         /**
-         * @brief The Animation class
-         * @note Each animation use (or reuse) a chunk of the key_frame array
-         * @note Animations referencing removed bodies are removed themselves, so that it's not safe to store
-         * indices of animations (it's better to always cycle through them).
-        */
+         * @brief The Animation class. Each animation owns a (kinematic) body index and a range of key frames.
+         * @note Each animation use (or reuse) a chunk of the key_frame array. The same chunk (i.e. range of key frames) can be used by more than one Animation (i.e. body), because each Animation can have an offset transform (baseT) and/or an offset time (offset_time).
+         * @note Animations referencing removed bodies (by default) are assigned to \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" (and skipped) next time \ref simulation_step "simulation_step(...)" is called (this behavior can be changed using the definition NUDGE_DELETE_KINEMATIC_ANIMATIONS_REFERENCING_REMOVED_BODIES).
+         * @note So by default it's safe to store animation indices (unless we manually delete animations, or define NUDGE_DELETE_KINEMATIC_ANIMATIONS_REFERENCING_REMOVED_BODIES).
+         * @note Using static/dynamic bodies in kinematic animations is something never tested (undefined behavior).
+         */
         struct Animation    {
             float play_time;    /**< [read] animation current time of play */
             float offset_time;  /**< if set, animation starts after offset_time */
@@ -454,7 +454,7 @@ namespace nudge {
                 LM_LOOP_NORMAL, /**< at the end, animation restarts */
                 LM_LOOP_PING_PONG   /**< at the end, animation goes back and forth */
             } loop_mode;        /**< animation loop mode */
-        }* animations;          /**< array of size animations_count of Animation structs */
+        }* animations;          /**< array of size animations_count of Animation structs; by default entries in this array are persistent, i.e. not deleted or reordered by nudge (but this behavior can be changed using the definition NUDGE_DELETE_KINEMATIC_ANIMATIONS_REFERENCING_REMOVED_BODIES) */
         uint32_t animations_capacity;    /**< the number of animations the array can contain (use \ref kinematic_data_reserve_animations "kinematic_data_reserve_animations(...)" to increase it) */
         uint32_t animations_count;     /**< the number of inserted animations */
     };
@@ -801,7 +801,7 @@ namespace nudge {
      * you should not remove the body, but just change its properties (more efficient + no delay).
      * @note Sometimes it's better to not remove a body at all, but just disable it using: (*body_get_flags(...))|=BF_IS_DISABLE and optionally put it into a user-side custom list for later reusage/reactivation. This way the body colliders are preserved.
      * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always returned.
-     * @note Any non-physic user data is NOT reset when a body is removed, but all the physic data are reset (any kinematic animation that is assigned to the removed body gets deleted when the (internal) finalize_removed_bodies(...) function is called at the beginning of \ref simulation_step "simulation_step(...)").
+     * @note Any non-physic user data is NOT reset when a body is removed, but all the physic data are reset (kinematic animations referencing removed bodies are assigned to \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" when the (internal) finalize_removed_bodies(...) function is called at the beginning of \ref simulation_step "simulation_step(...) (there's an optional definition NUDGE_DELETE_KINEMATIC_ANIMATIONS_REFERENCING_REMOVED_BODIES to delete the kinematic animations instead)").
     */
     void remove_body(context_t* c,unsigned body);
     /**
@@ -3747,15 +3747,19 @@ static void simulate_kinematic_animations(context_t* c,float timeStep)  {
     for (int j=0,j_sz=(int)c->kinematic_data.animations_count;j<j_sz;j++) {
         KinematicData::Animation* ka = &c->kinematic_data.animations[j];
         if (ka->body>=c->bodies.count) continue;
-        const uint32_t flags = c->bodies.filters[ka->body].flags;
+        const uint32_t flags = c->bodies.filters[ka->body].flags;        
         if (flags&BF_IS_DISABLED_OR_REMOVED) {
             if (flags&BF_IS_REMOVED) {
+#               ifdef NUDGE_DELETE_KINEMATIC_ANIMATIONS_REFERENCING_REMOVED_BODIES
                 // Delete KinematicData::Animation
                 // |------|-----|-----|-----|
                 // 0      1     2     3     4
                 //        j                count
                 memmove(&c->kinematic_data.animations[j],&c->kinematic_data.animations[j+1],(c->kinematic_data.animations_count-(j+1))*sizeof(KinematicData::Animation));
                 --j;--j_sz;--c->kinematic_data.animations_count;
+#               else // NUDGE_DELETE_KINEMATIC_ANIMATIONS_REFERENCING_REMOVED_BODIES
+                ka->body = NUDGE_INVALID_BODY_ID;assert(ka->body>=c->bodies.count);
+#               endif // NUDGE_DELETE_KINEMATIC_ANIMATIONS_REFERENCING_REMOVED_BODIES
             }
             continue;
         }
