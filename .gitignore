@@ -64,6 +64,7 @@ reps/
 *.exe
 *.dll
 *.7z
+*.sav
 example/html
 example/linux/example
 example/example
@@ -72,10 +73,23 @@ example/example_no_ffp_with_shadows
 example/example_no_ffp_with_shadows_nosimd
 webassembly/
 simde/simde_legacy.7z
+new_version/*.o
+new_version/*.obj
+new_version/Makefile
 new_version/reps
+new_version/example/reps
 new_version/doc
+new_version/*.stash
+new_version/example/example
 new_version/example/example01
-new_version/example/linux/example
+new_version/example/example02
+new_version/example/example03
+new_version/example/Makefile
+new_version/example/linux/example*
+new_version/example/win/example*
+new_version/example/mac/example*
+new_version/nudge_examples.pro
+new_version/nudge_examples.pro.user
 
 
 

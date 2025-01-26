@@ -20,11 +20,12 @@
 // SOFTWARE.
 //
 
-
-// Modified by Flix01 (https://github.com/Flix01/nudge/tree/master/new_version) in 2024
+// Modified, refactored and documented by Flix01 (https://github.com/Flix01/nudge/tree/master/new_version) in 2024
 // [I'm not a physics engine expert at all, the mods I've made are just to ease my usage scenario]
 // [I've also probably decreased performance and broken something, so if you're a
 // physics engine expert, I suggest you base your mods on the original version]
+
+
 
 /**
  * \mainpage Nudge Physics Library Documentation
@@ -155,14 +156,29 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdarg.h>	// log function declaration
+#ifdef NUDGE_USER_CFG_FILE_NAME
+#   include NUDGE_USER_CFG_FILE_NAME // optional definition for advanced users (to be placed in the project options or in the compiler commandline, not inside code files). Remember to escape quotes (e.g. -DNUDGE_USER_CFG_FILE_NAME="\"nudge_user_cfg.h\"" on the commandline)
+#endif
 #ifndef NUDGE_NO_STDIO
 #	include <stdio.h>
 #endif
+#ifndef __cplusplus
+#   error nudge.h is a c++ file and should be compiled as c++
+#elif __cplusplus < 201103L
+#   define NUDGE_NO_CPP11_DETECTED
+#   undef NUDGE_USE_INT32_ENUMS
+#   define NUDGE_USE_INT32_ENUMS    // if set: bigger enums (more space for body flags and collision groups: the BodyFilter struct is 3x bigger), but worse cache performance (note that bit operations are generally not faster with smaller types)
+//  Also note that there are still a few anonymous structs (that by standard require C++11 compilation),
+//  but in my tests both g++ and clang++ work just fine with -std=c++98
+//  In case of problems please define NUDGE_NO_ANONYMOUS_STRUCTS
+#endif  // __cplusplus
+
 
 namespace nudge {
 
     /**
      * @brief The Arena struct used internally
+     * @note Devs: technically we could allow multiple \ref context_t "nudge contexts" running on the same thread to share the same arena to minimize memory usage, but this is not a priority (and in most cases multiple contexts are used in parallel)
      */
     struct Arena {
         void* data;
@@ -171,15 +187,35 @@ namespace nudge {
 
     /**
      * @brief The Transform struct
+     * @note This struct has been rearranged to use anomymous unions for improved flexibility, but now initializations must be done with and additional pair of curly parenthesis, otherwise some compiler can issue a warning; for example: Transform T = { {{0,0,0}} , {0} , {{0,0,0,1}} };
+     * @note The 'vector' and 'quaternion' fields have been added only to allow partial assignments like: T2.quaternion = T1.quaternion;
+     * @note By default this struct contains nested anonymous structs that allow to use {.px,.px,.pz} and {.rx,.rx,.rz,.rw}/{.qx,.qx,.qz,.qw} fields: this requires the C++11 standard (but in my tests g++ and clang++ with -std=c++98 is enough)
+     * @note There is a definition named NUDGE_NO_ANONYMOUS_STRUCTS that can be used to remove anonymous structs, that usually require -std=c++11 (even if g++ and clang++ seem to work just fine with -std=c++98 in my tests)
      */
-	struct Transform {
-        float position[3];  /**< position applied before rotation */
+    struct Transform {
+        union {
+            float position[3];  /**< position applied before rotation */
+            float p[3];
+            struct {float x,y,z;} vector;
+#           ifndef NUDGE_NO_ANONYMOUS_STRUCTS
+            struct {float px,py,pz;};
+#           endif
+        };
         union {
             uint32_t body;  /**< the body index (used mainly inside colliders to retrieve the body) */
             float time;     /**< only used inside KinematicData key frames */
         };
-        float rotation[4];  /**< the orientation in quaternion form */
-	};
+        union {
+            float rotation[4];  /**< the orientation in quaternion form */
+            float r[4];
+            float q[4];
+            struct {float x,y,z,w;} quaternion;
+#           ifndef NUDGE_NO_ANONYMOUS_STRUCTS
+            struct {float rx,ry,rz,rw;};
+            struct {float qx,qy,qz,qw;};
+#           endif
+        };
+    };
     /**
      * @brief The BodyProperties struct
      */
@@ -217,7 +253,7 @@ namespace nudge {
 	struct Contact {
         float position[3];  /**< position of the contact in world space */
         float penetration;  /**< amount of penetration */
-        float normal[3];    /**< contact normal in world space */
+        float normal[3];    /**< contact normal in world space (not sure if this makes sense: it should be positive or negative according to the order of the two bodies, shouldn't it?) */
         float friction;     /**< contact friction */
 	};
     /**
@@ -259,11 +295,24 @@ namespace nudge {
             uint32_t count; /**< the number of sphere colliders */
         } spheres;    /**< Anonymous struct instance used to access all the shpere colliders */
 	};
+
+    /**
+     * @brief Always using this typedef for collision groups/masks is recommended
+     */
+#   ifndef NUDGE_USE_INT32_ENUMS
+    typedef uint8_t CollisionMask;
+#   else // NUDGE_USE_INT32_ENUMS
+    typedef uint32_t CollisionMask;
+#   endif // NUDGE_USE_INT32_ENUMS
     /**
      * @brief The CollisionMaskEnum enum
+     * @note If more groups are required, please define NUDGE_USE_INT32_ENUMS and add in your code: namespace nudge {const CollisionMask COLLISION_GROUP_G=1<<8,COLLISION_GROUP_H=1<<9,...;}
      */
-    enum CollisionMaskEnum {
-        // New
+    enum CollisionMaskEnum
+#   ifndef NUDGE_USE_INT32_ENUMS
+    : CollisionMask
+#   endif
+    {
         COLLISION_GROUP_DEFAULT   =     1<<0,
         COLLISION_GROUP_A   = 1<<1,
         COLLISION_GROUP_B   = 1<<2,
@@ -272,84 +321,106 @@ namespace nudge {
         COLLISION_GROUP_E   = 1<<5,
         COLLISION_GROUP_F   = 1<<6,
         COLLISION_GROUP_G   = 1<<7,
-        COLLISION_GROUP_H   = 1<<8,
-        COLLISION_GROUP_I   = 1<<9,
-        COLLISION_GROUP_J   = 1<<10,
-        COLLISION_GROUP_K   = 1<<11,
-        COLLISION_GROUP_L   = 1<<12,
-        COLLISION_GROUP_M   = 1<<13,
-        COLLISION_GROUP_N   = 1<<14,
-        COLLISION_GROUP_O   = 1<<15,
-        COLLISION_GROUP_P   = 1<<16,
-        COLLISION_GROUP_Q   = 1<<17,
-        COLLISION_GROUP_R   = 1<<18,
-        COLLISION_GROUP_S   = 1<<19,
-        COLLISION_GROUP_T   = 1<<20,
-        COLLISION_GROUP_U   = 1<<21,
-        COLLISION_GROUP_V   = 1<<22,
-        COLLISION_GROUP_W   = 1<<23,
-        COLLISION_GROUP_X   = 1<<24,
-        COLLISION_GROUP_Y   = 1<<25,
-        COLLISION_GROUP_Z   = 1<<26,
-        COLLISION_GROUP_01   = 1<<27,
-        COLLISION_GROUP_02   = 1<<28,
-        COLLISION_GROUP_03   = 1<<29,
-        COLLISION_GROUP_04   = 1<<30,
-        COLLISION_GROUP_05   = 1<<31,
-        COLLISION_GROUP_ALL  = (int) 0xFFFFFFFF,
-        COLLISION_GROUP_ALL_NUMBERS = COLLISION_GROUP_01|COLLISION_GROUP_02|COLLISION_GROUP_03|COLLISION_GROUP_04|COLLISION_GROUP_05,
-        COLLISION_GROUP_ALL_LETTERS  = COLLISION_GROUP_ALL&(~(COLLISION_GROUP_ALL_NUMBERS|COLLISION_GROUP_DEFAULT)),
+        COLLISION_GROUP_ALL = (CollisionMask)(-1)
     };
-    typedef int32_t CollisionMask;
+
+    /**
+     * @brief Always using this typedef for body flags is recommended
+     */
+#   ifndef NUDGE_USE_INT32_ENUMS
+    typedef uint16_t FlagMask;
+#   else // NUDGE_USE_INT32_ENUMS
+    typedef uint32_t FlagMask;
+#   endif // NUDGE_USE_INT32_ENUMS
     /**
      * @brief The BodyFlagEnum enum
+     * @note User can easily add custom flags this way: namespace nudge {const FlagMask BF_IS_MY_TYPE = 1<<12,...;}
+     * @note Flag marked [unused, not implemented] will never be implemented inside nudge.h
+     * @note Depending on the NUDGE_USE_INT32_ENUMS definition \ref FlagMask can contain 32 or 16 flags
      */
-    enum BodyFlagEnum {
+    enum BodyFlagEnum
+#   ifndef NUDGE_USE_INT32_ENUMS
+    : FlagMask
+#   endif
+    {
         BF_HAS_COM_OFFSET = 1<<0, /**< read-only [internal usage: automatically set when bodies are created] */
-        BF_IS_CHARACTER = 1<<1, /**< [unused, not implemented] flag added for user convenience */
-        BF_IS_PLATFORM = 1<<2,  /**< [unused, not implemented] flag added for user convenience */
-        BF_IS_DISABLED = 1<<3,  /**< [experimental] if used, it's better to set the body to static, reset its velocities and set its collision group and mask both to zero */
-        BF_IS_REMOVED = 1<<4,   /**< read-only [internal flag added when bodies are removed] */
+        BF_IS_DISABLED = 1<<1,  /**< [experimental] if used, it's better to set the body to static, reset its velocities and set its collision group and mask both to zero */
+        BF_IS_REMOVED = 1<<2,   /**< read-only [internal flag added when bodies are removed] */
         BF_IS_DISABLED_OR_REMOVED = BF_IS_DISABLED|BF_IS_REMOVED,   /**< read-only flag useful to filter out bodies excluded from simulation */
-        BF_IS_STATIC = 1<<5,    /**< read-only [internal flag added when bodies are added] */
-        BF_IS_KINEMATIC = 1<<6, /**< read-only [internal flag added when bodies are added] */
-        BF_IS_DYNAMIC = 1<<7,    /**< read-only [internal flag added when bodies are added] */
-        BF_NEVER_SLEEPING = 1<<8, /**< [experimental] [do NOT use] */
+        BF_IS_STATIC = 1<<3,    /**< read-only [internal flag added when bodies are added] */
+        BF_IS_KINEMATIC = 1<<4, /**< read-only [internal flag added when bodies are added] */
+        BF_IS_DYNAMIC = 1<<5,    /**< read-only [internal flag added when bodies are added] */
+        BF_NEVER_SLEEPING = 1<<6, /**< [experimental] */
+        BF_HAS_DIFFERENT_GRAVITY_MODE = 1<<7, /**< [experimental] inverts the \ref GlobalDataMaskEnum "GF_USE_GLOBAL_GRAVITY" mode in \ref GlobalData "c->global_data.flags" on a per-body base */
+#       ifndef NUDGE_BODYFLAG_ENUM_NO_UNUSED_FLAGS
+        BF_IS_CHARACTER = 1<<8, /**< [unused, not implemented] flag added for user convenience */
+        BF_IS_PLATFORM = 1<<9,  /**< [unused, not implemented] flag added for user convenience */
+        BF_IS_SENSOR = 1<<10,    /**< [unused, not implemented] flag added for user convenience */
+#       endif
         BF_IS_STATIC_OR_KINEMATIC = BF_IS_STATIC|BF_IS_KINEMATIC,   /**< read-only [internal flag] */
         BF_IS_STATIC_OR_DYNAMIC = BF_IS_STATIC|BF_IS_DYNAMIC,   /**< read-only [internal flag] */
         BF_IS_KINEMATIC_OR_DYNAMIC = BF_IS_KINEMATIC|BF_IS_DYNAMIC,   /**< read-only [internal flag] */
         BF_IS_STATIC_OR_KINEMATIC_OR_DYNAMIC = BF_IS_STATIC|BF_IS_KINEMATIC|BF_IS_DYNAMIC,   /**< read-only [internal flag] */
         BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED = BF_IS_STATIC_OR_KINEMATIC|BF_IS_DISABLED_OR_REMOVED  /**< read-only [internal flag] */
+#       ifdef NUDGE_BODYFLAG_ENUM_EXTRA_FIELDS
+#           define NUDGE_BODYFLAG_ENUM_EXTRA_FIELDS
+#       endif
     };
-    typedef int32_t FlagMask;
     /**
      * @brief The BodyFilter struct
      */
     struct BodyFilter {
+        FlagMask flags; /**< a bit masks of \ref BodyFlagEnum "BF_ enums"; most values are read-only, so don't (re)set it, but just add/remove tweakable flags to it */
         CollisionMask collision_group; /**< a SINGLE \ref CollisionMaskEnum "COLLISION_GROUP_ value". Default value: COLLISION_GROUP_DEFAULT (means that the body belongs to this group. Better not use more than one group per body) */
         CollisionMask collision_mask;   /**< a bit mask of \ref CollisionMaskEnum "COLLISION_GROUP_ values". Default value: COLLISION_GROUP_ALL (means that the body can collide with all the groups) */
-        FlagMask flags; /**< a bit masks of \ref BodyFlagEnum "BF_ enums"; most values are read-only, so don't (re)set it, but just add/remove tweakable flags to it */
-        int16_t aux_body; /**< [unused, unimplemented, experimental] convenience (body) index that is reset to -1 every frame (currently it can be used with the \ref TransformAssignToBody "TransformAssignToBody(...)" function) */
-        uint8_t idle_counter;  /**< mostly read-only; it's 0xff if the body is sleeping */
-        uint8_t padding;    /**< unused */
     };
+
     /**
-     * @brief The BodyInfo struct
+     * @brief Per-body struct that contains the indices of the body colliders inside \ref ColliderData "ColliderData::boxes and ColliderData::spheres"
+     * @note It's also possible to retrieve the body index from \ref ColliderData "c->colliders" using the bodyId field inside each collider's \ref Transform "Transform"
+    */
+    struct BodyLayout {
+        uint16_t num_boxes; /**< the number of box colliders this body owns */
+        int16_t first_box_index; /**< the index of the first box (or sphere) collider in \ref ColliderData "ColliderData::boxes" (box colliders are assumed to be contiguous, with no fragmentation), or -1 */
+
+        uint16_t num_spheres; /**< the number of shperes colliders this body owns */
+        int16_t first_sphere_index; /**< the index of the first sphere collider in \ref ColliderData "ColliderData::spheres" (sphere colliders are assumed to be contiguous, with no fragmentation), or -1 */
+    };
+
+    /**
+     * @brief The BodyInfo struct contains the read-only graphic center of mass offset of the body (mostly useless), and plenty of per-body user available space, handy to bind user-side structs to a nudge physic body
+     * @note User custom field injection is allowed by the two definitions NUDGE_BODYINFO_STRUCT_EXTRA_FIELDS and NUDGE_BODYINFO_STRUCT_EXTRA_PADDING; the best place to do so is in a nudge config header file (setting its name in the project-scope definition: NUDGE_USER_CFG_FILE_NAME)
+     * @note It's possible to remove all the default (per-body) user-fields of this struct using the definition NUDGE_BODYINFO_STRUCT_NO_USER_UNION; all except the 'aux_bodies[...]' field, that can be deleted by setting the NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS definition to zero
      */
     struct BodyInfo {
-        uint16_t num_boxes; /**< the number of box colliders this body owns */
-        uint16_t num_spheres; /**< the number of sphere colliders this body owns */
-        int16_t first_box_index; /**< the index of the first box collider in \ref ColliderData "ColliderData::boxes" (box colliders are assumed to be contiguous, with no fragmentation), or -1 */
-        int16_t first_sphere_index;  /**< the index of the first sphere collider in \ref ColliderData "ColliderData::spheres" (sphere colliders are assumed to be contiguous, with no fragmentation), or -1 */
-        float com_offset[3]; /**< [read-only] reference of the center of mass offset */
-#       ifndef NUDGE_BODYINFO_STRUCT_NO_USERID
-        int32_t userId; /**< user stuff */
-#       endif
 #       ifdef NUDGE_BODYINFO_STRUCT_EXTRA_FIELDS
-        NUDGE_BODYINFO_STRUCT_EXTRA_FIELDS /**< user stuff injected into the BodyInfo struct */
-#       else
-        void* userPtr; /**< user stuff */
-#       endif
+        NUDGE_BODYINFO_STRUCT_EXTRA_FIELDS /**< user stuff injected at the beginning of the BodyInfo struct */
+#       endif // NUDGE_BODYINFO_STRUCT_EXTRA_FIELDS
+        float com_offset[3]; /**< [read-only] reference of the center of mass offset (this is currently the only non-user field in the BodyInfo struct) */
+#       ifndef NUDGE_BODYINFO_STRUCT_NO_USER_UNION
+        union {
+            void* userPtr;      /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            int64_t userInt64;    /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            uint64_t userUint64;    /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            double userDouble;      /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            int32_t userInt32[2];    /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            uint32_t userUint32[2];    /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            float userFloat[2];     /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            int16_t userInt16[4];   /**< user data: a per-body user space in 9 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            uint16_t userUint16[4];   /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            int8_t userInt8[8];   /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            uint8_t userUint8[8];  /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+        };
+#       endif // NUDGE_BODYINFO_STRUCT_NO_USER_UNION
+#       ifndef NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS
+#           define NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS (2)
+#       endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS
+#       if NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS>0
+        int16_t aux_bodies[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS]; /**< user data that are reset to -1 every frame (but only for bodies in the \ref ActiveBodies "c->active_bodies" list); they can be used to store body indices, since they are currently in the [0,8192) range */
+#       endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS
+#       ifdef NUDGE_BODYINFO_STRUCT_EXTRA_PADDING
+        NUDGE_BODYINFO_STRUCT_EXTRA_PADDING /**< user stuff injected at the end of the BodyInfo struct */
+#       endif // NUDGE_BODYINFO_STRUCT_EXTRA_PADDING
     };
     /**
      * @brief The main struct contained in \ref context_t "context_t": it exposes every per-body data in the simulation, except collisions
@@ -359,8 +430,10 @@ namespace nudge {
         Transform* transforms;  /**< array of size count, containing the position and rotation (in quaternion form) of each body */
         BodyProperties* properties;  /**< array of size count, containing the mass, inertia, gravity and friction of each body */
         BodyMomentum* momentum;  /**< array of size count, containing the linear and angular velocity of each body */
-        BodyFilter* filters;    /**< array of size count, containing the collision group, the collision mask, some flags and a 'sleeping counter' for each body */
-        BodyInfo* infos;    /**< array of size count, containing the colliders (i.e. collision shapes) indices of each body, and customizable per-body user data */
+        BodyFilter* filters;    /**< array of size count, containing the collision group, the collision mask, and flags for each body */
+        BodyLayout* layouts;     /**< array of size count, containing the colliders (i.e. collision shapes) indices of each body (see also the \ref ColliderData "c->colliders" arrays) */
+        BodyInfo* infos;    /**< array of size count, , and customizable per-body user data */
+        uint8_t* idle_counters; /**< array of size count, containing a counter per body, where a value of 0xFF indicates that the body is sleeping (it currently affectes only dynamic bodies); each value can be set to 0x00 to wake up a dynamic body */
         uint32_t count; /**< the number of bodies in the world. Bodies are never shuffled in the array, so indices are preserved. When bodies are removed count does not change (tip: filter the bodies with their flags to exclude removed and disabled bodies) */
 	};
     /**
@@ -405,7 +478,7 @@ namespace nudge {
      * \def NUDGE_INVALID_BODY_ID
      * Value of a body index in an invalid state
      */
-#   define NUDGE_INVALID_BODY_ID (32768)
+#   define NUDGE_INVALID_BODY_ID (32767)
 
     // TODO: currently int32_t or uint32_t is used as body index: but at most MAX_NUM_BODIES is 8192.
     // So we can use int16_t and uint16_t (where padding/alignment is not required).
@@ -416,19 +489,19 @@ namespace nudge {
      * @brief The KinematicData is composed by two arrays: an array of global key frames and an array of animations.
      * Each animation owns a (kinematic) body index and a range of key frames.
      * @note Kinematic animations are just used to automatically move kinematic bodies. Each range of key frames can be used by more than one Animation (i.e. body), because each Animation can have an offset transform (baseT) and/or an offset time (offset_time).
-     * @note All the times are intended in seconds, and AFAIR (TOCHECK) they represent the (relative) time to get to the current key frame.
+     * @note All the times are intended in seconds, and they represent the (relative) time to get to the current key frame.
      */
     struct KinematicData  {
         // key_frame_transforms and key_frame_modes are a single memory block used by all animations
         Transform* key_frame_transforms;   /**< array of size key_frame_count of Transform structs, where each element has the Transform::time field set */
         /**
-         * @brief TimeMode enum
+         * @brief TimeMode enum is an optional experimental flag
          */
         enum TimeMode {
             TM_NORMAL=0,    /**< uniform speed across the transforms */
             TM_ACCELERATE,  /**< accelerated speed across the transforms */
             TM_DECELERATE   /**< decelerated speed across the transforms */
-        }* key_frame_modes; /**< array of size key_frame_count of TimeMode enums (experimental, it can probably be completely ignored in most cases) */
+        }* key_frame_modes; /**< array of size key_frame_count of TimeMode enums (experimental, it can probably be completely ignored in most cases) [TODO: remove?] */
         uint32_t key_frame_capacity;    /**< the number of key frames the arrays can contain (use \ref kinematic_data_reserve_key_frames "kinematic_data_reserve_key_frames(...)" to increase it) */
         uint32_t key_frame_count;      /**< the number of inserted key frames */
         /**
@@ -466,35 +539,39 @@ namespace nudge {
         // read/write
         double time_step;    /**< [tweakable] [default value 1.0/60.0] */
         unsigned max_num_substeps; /**< [tweakable] [default value 2] when too much time passes, only max_num_substeps are performed, and the simulation 'burns' the remaining substeps */
-        unsigned num_iterations_per_time_step;   /**< [tweakable] [default value 5] it improves some stability at the expense of performance */
+        unsigned num_iterations_per_substep;   /**< [tweakable] [default value 5] it improves some stability at the expense of performance */
         float sleeping_threshold_linear_velocity_squared;  /**< [tweakable] [default value 1e-2f]; by increasing it the bodies goes to sleep faster */
         float sleeping_threshold_angular_velocity_squared; /**< [tweakable] [default value 1e-1f]; by increasing it the bodies goes to sleep faster */
         float linear_damping;   /**< [tweakable] [default value 0.25]; by increasing it, the bodies slow down their movement faster */
         float angular_damping;  /**< [tweakable] [default value 0.25]; by increasing it, the bodies slow down their rotation faster  */
         float penetration_allowed_amount; /**< [tweakable(?)] [default value 1e-3f]; */
         float penetration_bias_factor; /**< [tweakable(?)] [default value 2.0f]; */
+        unsigned numsubsteps_overflow_warning_mode; /**< [tweakable] nudge::log warns on every frame with a numsubstep overflown. Modes: 0:warn on second successive frame;1:warn always;2:never warn. Default is 0 */
 
         // read only
-        unsigned long long num_frames;  /**< [read-only] number of physic frames, i.e. the total number of physic substeps so far. In one graphic frame there can be a number of frame in the interval [0,max_num_substeps] */
+        unsigned long long num_frames;  /**< [read-only] number of physic frames, i.e. the total number of calls to \ref simulation_step "simulation_step(...)" with at least one substep to perform. Usually in each graphic frame there is a single call to \ref simulation_step "simulation_step" and the number of physic frames can increase by one unit or remain constant (TODO: consider removing this, and renaming num_frames the num_total_substeps) */
+        unsigned long long num_total_substeps;  /**< [read-only] the total number of physic substeps so far. In one physic frame there can be a number of substeps in the interval [0,max_num_substeps]; good value for benchmark measures */
         double remaining_time_in_seconds;    /**< [used internally] */
         float time_step_minus_remaining_time;   /**< [used intenally] */
-        unsigned num_substeps_in_last_frame;    /**< [read-only] returned by \ref pre_simulation_step "pre_simulation_step(...)"; it's <= max_num_substeps */
+        unsigned num_substeps_in_last_frame;    /**< [read-only] returned by \ref pre_simulation_step "pre_simulation_step(...)"; it's <= max_num_substeps, and it equals the number of substeps that next call to \ref simulation_step "simulation_step" will perform */
+        unsigned numsubsteps_overflow_in_last_frame; /**< [read-only] set in \ref simulation_step "simulation_step" */
     };
     /**
      * @brief The GlobalDataMaskEnum enum
      */
     enum GlobalDataMaskEnum {
-        GF_USE_GLOBAL_GRAVITY = 1<<0,    /**< this flag can override the per-body gravity with GlobalData::gravity (disabled by default) */
-        GF_SMOOTH_GRAPHIC_TRANSFORMS_FOR_DYNAMIC_BODIES = 1<<1, /**< this flag just affects body transform smoothing in two function (\ref calculate_graphic_transform_for_body "calculate_graphic_transform_for_body(...)" and \ref calculate_graphic_transforms "calculate_graphic_transforms(...)"); it's set by default */
-        GF_SMOOTH_GRAPHIC_TRANSFORMS_FOR_KINEMATIC_BODIES = 1<<2, /**< this flag just affects body transform smoothing in two function (\ref calculate_graphic_transform_for_body "calculate_graphic_transform_for_body(...)" and \ref calculate_graphic_transforms "calculate_graphic_transforms(...)"); it's set by default  */
-        GF_SMOOTH_GRAPHIC_TRANSFORMS = GF_SMOOTH_GRAPHIC_TRANSFORMS_FOR_DYNAMIC_BODIES|GF_SMOOTH_GRAPHIC_TRANSFORMS_FOR_KINEMATIC_BODIES, /**< this flag just affects body transform smoothing in two function (\ref calculate_graphic_transform_for_body "calculate_graphic_transform_for_body(...)" and \ref calculate_graphic_transforms "calculate_graphic_transforms(...)"); it's set by default */
+        GF_USE_GLOBAL_GRAVITY = 1<<0    /**< this flag disables per-body gravity and uses \ref GlobalData "GlobalData::gravity" instead (disabled by default) */
+#       ifdef NUDGE_GLOBALDATAMASK_ENUM_EXTRA_FIELDS
+#           define NUDGE_GLOBALDATAMASK_ENUM_EXTRA_FIELDS
+#       endif
     };
     /**
      * @brief The GlobalData struct inglobes global fields that could not fit in the SimulationParams struct
      */
     struct GlobalData   {
         float gravity[3];    /**< by default each body uses its own gravity (in its 'properties'), but by using the GF_USE_GLOBAL_GRAVITY flags, all the bodies share this gravity value (defaults to {0,-9.82,0}) */
-        uint32_t flags;     /**< bit mask of GF_ flags; please do not reset it, just set or reset flags inside it (because some flags are be set by default, and other flags might be added in the future) */
+        uint32_t flags;     /**< bit mask of \ref GlobalDataMaskEnum "GF_ flags"; please do not reset it, just set or reset flags inside it (because some flags could be set by default, and other flags could be added in the future) */
+        FlagMask exclude_smoothing_graphic_transform_flags;   /**< bit mask of \ref BodyFlagEnum "BF_ flags"; default value is 0; this flag just affects body transform smoothing in two functions (\ref calculate_graphic_transform_for_body "calculate_graphic_transform_for_body(...)" and \ref calculate_graphic_transforms "calculate_graphic_transforms(...)"); note that in any case static bodies and dynamic sleeping bodies are always not smoothed, because they are still; possible values are usually: BF_IS_DYNAMIC and/or BF_IS_KINEMATIC (both together disable transform smoothing completely) */
         uint32_t* removed_bodies;  /**< [internal usage, \ref remove_body "remove_body(...)"] since we can't remove bodies properly, instead we put bodies in stand-by ready to be reused (when new bodies are added) and we free their colliders; removed bodies end in this list and can be filtered out using their BF_IS_REMOVED flag */
         uint32_t removed_bodies_count;  /**< [internal usage] */
         uint32_t finalized_removed_bodies_count;  /**< [internal usage] finalized_removed_bodies_count<=removed_bodies_count; finalization happens at the start of the \ref simulation_step "simulation_step(...)" function */
@@ -525,14 +602,24 @@ namespace nudge {
         const unsigned MAX_NUM_SPHERES; /**< fixed value of the max number of sphere colliders that can be used in the simulation; @see init_context_with(...); it must be: c->MAX_NUM_BOXES+c->MAX_NUM_SPHERES<8192 (the limitation seems to arise from the broadphase management) */
         const unsigned MAX_NUM_BODIES;  /**< fixed value that should always be equal to: MAX_NUM_BOXES+MAX_NUM_SPHERES; this value is only reachable when a single collider per body is used */
 
-#       ifndef NUDGE_CONTEXT_STRUCT_NO_USERID
-        int32_t userId; /**< user stuff */
-#       endif
 #       ifdef NUDGE_CONTEXT_STRUCT_EXTRA_FIELDS
         NUDGE_CONTEXT_STRUCT_EXTRA_FIELDS /**< user stuff injected into the context_t struct */
-#       else
-        void* userPtr; /**< user stuff */
-#       endif
+#       endif // NUDGE_CONTEXT_STRUCT_EXTRA_FIELDS
+#       ifndef NUDGE_CONTEXT_STRUCT_NO_USER_UNION
+        union {
+            void* userPtr;      /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            int64_t userInt64;    /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            uint64_t userUint64;    /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            double userDouble;      /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            int32_t userInt32[2];    /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            uint32_t userUint32[2];    /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            float userFloat[2];     /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            int16_t userInt16[4];   /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            uint16_t userUint16[4];   /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            int8_t userInt8[8];   /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+            uint8_t userUint8[8];  /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
+        };
+#       endif // NUDGE_CONTEXT_STRUCT_NO_USER_UNION
     };
 
 
@@ -623,7 +710,7 @@ namespace nudge {
     void show_info();
     /**
      * @brief Mandatory function to be called at program startup
-     * @param c the nudge context
+     * @param c the nudge context; best practice is to clear its memory before calling this function
      * @param MAX_NUM_BOXES the max number of box colliders (i.e. box collision shapes) that can be used in the library (each physic body can contain one or more colliders and each collider is owned by a single physic body)
      * @param MAX_NUM_SPHERES the max number of sphere colliders (i.e. sphere collision shapes) that can be used in the library (each physic body can contain one or more colliders and each collider is owned by a single physic body)
      * @note It must be MAX_NUM_BOXES+MAX_NUM_SPHERES<=8192
@@ -631,15 +718,23 @@ namespace nudge {
     void init_context_with(context_t *c, unsigned MAX_NUM_BOXES,unsigned MAX_NUM_SPHERES);
     /**
      * @brief Mandatory function to be called at program startup
-     * @param c the nudge context
+     * @param c the nudge context; best practice is to clear its memory before calling this function
      * @note It sets MAX_NUM_BOXES and MAX_NUM_SPHERES to some default value (see \ref init_context_with "init_context_with(...)")
      */
     void init_context(context_t* c);
     /**
      * @brief Mandatory function to be called at program exit
      * @param c the nudge context
+     * @note After this call \ref init_context "init_context(...)" and \ref init_context_with "init_context_with(...)" can be called again, but \ref restart_context "restart_context(...)" can't
      */
     void destroy_context(context_t* c);
+    /**
+     * @brief Optional function that restarts a valid context, preserving the simulation settings and the allocated memory
+     * @param c a valid nudge context that must be inited with \ref init_context "init_context(...)" or \ref init_context_with "init_context_with(...)"
+     * @note This function is faster than calling in sequence \ref destroy_context "destroy_context(...)" and \ref init_context "init_context(...)" (no deallocations/allocations)
+     * @note If you want to restart the simulation frame/substep counters, please manually set: c->simulation_params.num_frames=0;c->simulation_params.num_total_substeps=0;
+    */
+    void restart_context(context_t* c);
 
 #   ifndef NUDGE_NO_STDIO
     /**
@@ -716,8 +811,8 @@ namespace nudge {
      * @param hsizez half box size in the z direction
      * @param T a pointer to a Transform
      * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
-     * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if no more boxes can be added
+     * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      */
     unsigned add_box(context_t* c,float mass, float hsizex, float hsizey, float hsizez, const Transform* T=NULL,const float comOffset[3]=NULL);
     /**
@@ -729,8 +824,8 @@ namespace nudge {
      * @param hsizez half box size in the z direction
      * @param mMatrix16WithoutScaling a pointer to a 4x4 column-major matrix with only translation and rotation
      * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
-     * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if no more boxes can be added
+     * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      */
     unsigned add_box(context_t* c,float mass, float hsizex, float hsizey, float hsizez, const float* mMatrix16WithoutScaling,const float comOffset[3]=NULL);
     /**
@@ -740,8 +835,8 @@ namespace nudge {
      * @param radius the sphere radius
      * @param T a pointer to a Transform
      * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
-     * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if no more spheres can be added
+     * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      */
     unsigned add_sphere(context_t* c,float mass, float radius, const Transform* T=NULL,const float comOffset[3]=NULL);
     /**
@@ -751,15 +846,15 @@ namespace nudge {
      * @param radius the sphere radius
      * @param mMatrix16WithoutScaling a pointer to a 4x4 column-major matrix with only translation and rotation
      * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
-     * @note Every time \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if no more spheres can be added
+     * @note Every time \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      */
     unsigned add_sphere(context_t* c,float mass, float radius, const float* mMatrix16WithoutScaling,const float comOffset[3]=NULL);
     /**
      * @brief Adds a new body to the simulation with a compound collider made up of num_boxes box colliders and num_spheres sphere colliders
      * @param c the nudge context
      * @param mass positive => dynamic; 0 => static; negative => kinematic
-     * @param inertia an optional inertia tensor in a 3-float array form (see also the @ref inertia_group "inertia helper functions")
+     * @param inertia an inertia tensor in a 3-float array form that is used only if mass is positive (see also the @ref inertia_group "inertia helper functions")
      * @param num_boxes
      * @param hsizeTriplets pointer to an array of size 3*num_boxes floats
      * @param boxOffsetTransforms pointer to an array of num_boxes Transforms
@@ -768,15 +863,16 @@ namespace nudge {
      * @param sphereOffsetTransforms pointer to an array of num_sphere Transforms
      * @param T a pointer to a Transform
      * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
-     * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if no more boxes can be added
+     * @note When 'mass' is positive, 'inertia' must be valid, othewise the body inertia inverse is set to zero and the dynamic body won't rotate (nudge can't calculate the coumpound body extension to calculate a default inertia vector, so 'inertia' must be provided by the user)
+     * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      */
     unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_boxes, const float* hsizeTriplets, const Transform* boxOffsetTransforms, unsigned num_spheres, const float* radii, const Transform* sphereOffsetTransforms, const Transform* T=NULL, const float comOffset[3]=NULL);
     /**
      * @brief Adds a new body to the simulation with a compound collider made up of num_boxes box colliders and num_spheres sphere colliders
      * @param c the nudge context
      * @param mass positive => dynamic; 0 => static; negative => kinematic
-     * @param inertia an optional inertia tensor in a 3-float array form (see also the @ref inertia_group "inertia helper functions")
+     * @param inertia an inertia tensor in a 3-float array form that is used only if mass is positive (see also the @ref inertia_group "inertia helper functions")
      * @param num_boxes
      * @param hsizeTriplets pointer to an array of size 3*num_boxes floats
      * @param boxOffsetMatrices16WithoutScaling pointer to an array of num_boxes*16 floats
@@ -785,8 +881,9 @@ namespace nudge {
      * @param sphereOffsetMatrices16WithoutScaling pointer to an array of num_sphere*16 floats
      * @param sphereOffsetMatrices16WithoutScaling a pointer to a 4x4 column-major matrix with only translation and rotation
      * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
-     * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if no more boxes can be added
+     * @note When 'mass' is positive, 'inertia' must be valid, othewise the body inertia inverse is set to zero and the dynamic body won't rotate (nudge can't calculate the coumpound body extension to calculate a default inertia vector, so 'inertia' must be provided by the user)
+     * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      */
     unsigned add_compound(context_t* c,float mass, float inertia[3],unsigned num_boxes,const float* hsizeTriplets,const float* boxOffsetMatrices16WithoutScaling,unsigned num_spheres,const float* radii,const float* sphereOffsetMatrices16WithoutScaling,const float* mMatrix16WithoutScaling=NULL, const float comOffset[3]=NULL);
 
@@ -801,7 +898,7 @@ namespace nudge {
      * you should not remove the body, but just change its properties (more efficient + no delay).
      * @note Sometimes it's better to not remove a body at all, but just disable it using: (*body_get_flags(...))|=BF_IS_DISABLE and optionally put it into a user-side custom list for later reusage/reactivation. This way the body colliders are preserved.
      * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always returned.
-     * @note Any non-physic user data is NOT reset when a body is removed, but all the physic data are reset (kinematic animations referencing removed bodies are assigned to \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" when the (internal) finalize_removed_bodies(...) function is called at the beginning of \ref simulation_step "simulation_step(...) (there's an optional definition NUDGE_DELETE_KINEMATIC_ANIMATIONS_REFERENCING_REMOVED_BODIES to delete the kinematic animations instead)").
+     * @note Any non-physic user data is NOT reset when a body is removed, but all the physic data are reset (kinematic animations referencing removed bodies are assigned to \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" when the internal finalize_removed_bodies(...) function is called at the beginning of \ref simulation_step "simulation_step(...)" (there's an optional definition NUDGE_DELETE_KINEMATIC_ANIMATIONS_REFERENCING_REMOVED_BODIES to delete the kinematic animations instead)).
     */
     void remove_body(context_t* c,unsigned body);
     /**
@@ -933,8 +1030,7 @@ namespace nudge {
      * @defgroup math_group Math Functions
      * @{
      */
-    static const Transform identity_transform = { {}, {0}, { 0.0f, 0.0f, 0.0f, 1.0f } };
-    static const float identity_vec3[3] = { 1.f,1.f,1.f };    
+    static const Transform identity_transform = { {}, {0}, { {0.0f, 0.0f, 0.0f, 1.0f} } };
     /**
      * @brief Converts a column-major 16-floats matrix without any scaling applied to a nudge::Transform
      * @param Tout the output nudge::Transform
@@ -953,9 +1049,9 @@ namespace nudge {
      * @param body the target body index
      * @param newT the new transform
      * @param deltaTime the (small) time difference in seconds (used to calculate linear and angular velocities: v = space/time)
-     * @param add_aux_body_velocities [experimental] if true, if c->bodies.filters[body].aux_body!=-1, then additional linear and angular velocities are calculated and summed, so that it 'should' generate a 'dragging' effect on 'body' (the idea was to experiment with a kind of platform-convey effect that does not depend on friction only)
+     * @param aux_body [experimental] if the aux_body index is >=0, then additional linear and angular velocities are calculated and summed, so that the aux_body 'should' generate a 'dragging' effect on 'body' (the idea was to experiment with a kind of platform-convey effect that does not depend on friction only)
      */
-    void TransformAssignToBody(context_t* c,unsigned body,Transform newT,float deltaTime,bool add_aux_body_velocities=false);
+    void TransformAssignToBody(context_t* c,unsigned body,Transform newT,float deltaTime,int16_t aux_body=-1);
     /**
      * @brief Advances the body's transform based on its linear and angular velocities
      * @param c the nudge context
@@ -1033,7 +1129,7 @@ namespace nudge {
      * @return same as qOut4 (for chaining the call only)
      * @note Functions with the nm_ prefix have been imported by the \link https://github.com/Flix01/Header-Only-GL-Helpers/blob/master/minimath.h minimath \endlink library (MIT license). These functions might be renamed, removed or hidden in the future
      */
-    float* nm_QuatMul(float* __restrict qOut4,const float* __restrict a4,const float* __restrict b4);
+    float* nm_QuatMul(float* /*__restrict*/ qOut4,const float* /*__restrict*/ a4,const float* /*__restrict*/ b4);
     /**
      * @brief normalizes a 4-floats quaternion in place
      * @param q4 the input/output 4-floats quaternion
@@ -1065,6 +1161,60 @@ namespace nudge {
      * @note Functions with the nm_ prefix have been imported by the \link https://github.com/Flix01/Header-Only-GL-Helpers/blob/master/minimath.h minimath \endlink library (MIT license). These functions might be renamed, removed or hidden in the future
      */
     void nm_Vec3Normalize(float* __restrict v3);
+    /**
+     * @brief Computes the cross product between two 3-floats vectors
+     * @param vOut3 the output 3-floats vector
+     * @param a3 the first input 3-floats vector
+     * @param b3 the second input 3-floats vector
+     * @return same as vOut3 (for chaining the call only)
+     * @note Functions with the nm_ prefix have been imported by the \link https://github.com/Flix01/Header-Only-GL-Helpers/blob/master/minimath.h minimath \endlink library (MIT license). These functions might be renamed, removed or hidden in the future
+     */	
+	float* nm_Vec3Cross(float* __restrict vOut3,const float* __restrict a3,const float* __restrict b3);
+    
+    /**
+     * @brief Transforms a 3-floats vector by a 4-floats quaternion
+     * @param vOut3 the output 3-floats vector
+     * @param q4 the input 4-floats unit quaternion
+     * @param vIn3 the input 3-floats vector
+     * @return same as vOut3 (for chaining the call only)
+     * @note it should be equivalent to: nm_QuatMul(vOut4,q4,vOut4);nm_QuatMul(vOut4,vOut4,qc4); where qc is q conjugate and vOut4 is {vOut3,0}
+     * @note This function is never used in nudge.h
+     * @note Functions with the nm_ prefix have been imported by the \link https://github.com/Flix01/Header-Only-GL-Helpers/blob/master/minimath.h minimath \endlink library (MIT license). These functions might be renamed, removed or hidden in the future
+     */
+    float* nm_QuatMulVec3(float* __restrict vOut3,const float* __restrict q4,const float* __restrict vIn3);
+
+    /**
+     * @brief Transforms a particular axis from the input quaternion space to word space
+     * @param vOut3 the output 3-floats vector
+     * @param q4 the first input 4-floats unit quaternion
+     * @param axisX the first component of the input axis
+     * @param axisY the second component of the input axis
+     * @param axisZ the third component of the input axis
+     * @return same as vOut3 (for chaining the call only)
+     * @note if the input axis is not normalized, then user should call nm_Vec3Normalize(vOut3);
+     * @note it should be equivalent to: nm_QuatMul(vOut4,q4,vOut4);nm_QuatMul(vOut4,vOut4,qc4); where qc is q conjugate and vOut4 is {vOut3,0}
+     * @note This function is never used in nudge.h
+     * @note Functions with the nm_ prefix have been imported by the \link https://github.com/Flix01/Header-Only-GL-Helpers/blob/master/minimath.h minimath \endlink library (MIT license). These functions might be renamed, removed or hidden in the future
+     */
+    float* nm_QuatGetAxis(float* __restrict vOut3,const float* __restrict q4,float axisX,float axisY,float axisZ);
+    inline float* nm_QuatGetAxisX(float* __restrict axisOut3,const float* __restrict q4) {return nm_QuatGetAxis(axisOut3,q4,1,0,0);}
+    inline float* nm_QuatGetAxisY(float* __restrict axisOut3,const float* __restrict q4) {return nm_QuatGetAxis(axisOut3,q4,0,1,0);}
+    inline float* nm_QuatGetAxisZ(float* __restrict axisOut3,const float* __restrict q4) {return nm_QuatGetAxis(axisOut3,q4,0,0,1);}
+
+
+    /**
+     * @brief Rotates an input 4-floats unit quaternion by an angle in radians around a specified axis
+     * @param qInOut4 the input/output 4-floats unit quaternion
+     * @param angle the input angle in radians
+     * @param axisX the first component of the input axis
+     * @param axisY the second component of the input axis
+     * @param axisZ the third component of the input axis
+     * @return same as qInOut4 (for chaining the call only)
+     * @note This function is never used in nudge.h
+     * @note Functions with the nm_ prefix have been imported by the \link https://github.com/Flix01/Header-Only-GL-Helpers/blob/master/minimath.h minimath \endlink library (MIT license). These functions might be renamed, removed or hidden in the future
+     */
+    float* nm_QuatRotate(float* __restrict qInOut4,float angle,float axisX,float axisY,float axisZ);
+
     /** @} */ // end of math_group
 
     /**
@@ -1073,14 +1223,18 @@ namespace nudge {
      * @{
      */
     void calculate_box_inertia(float result[3],float mass,float hsizex,float hsizey,float hsizez,const float comOffset[3]=NULL);
-    void calculate_sphere_inertia(float result[3],float mass,float radius,const float comOffset[3]=NULL);
+    void calculate_sphere_inertia(float result[3],float mass,float radius,const float comOffset[3]=NULL,bool hollow=false);
     void calculate_cylinder_inertia(float result[3],float mass,float radius,float halfHeight,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
+    void calculate_capsule_inertia(float result[3],float mass,float radius,float halfCylinderHeight,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
     void calculate_torus_inertia(float result[3],float mass,float majorRadius,float minorRadius,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
+    void calculate_hollow_cylinder_inertia(float result[3],float mass,float R,float r,float halfHeight,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
 
     void calculate_box_inertia_inverse(float result[3],float mass,float hsizex,float hsizey,float hsizez,const float comOffset[3]=NULL);
-    void calculate_sphere_inertia_inverse(float result[3],float mass,float radius,const float comOffset[3]=NULL);
+    void calculate_sphere_inertia_inverse(float result[3],float mass,float radius,const float comOffset[3]=NULL,bool hollow=false);
     void calculate_cylinder_inertia_inverse(float result[3],float mass,float radius,float halfHeight,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
+    void calculate_capsule_inertia_inverse(float result[3],float mass,float radius,float halfCylinderHeight,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
     void calculate_torus_inertia_inverse(float result[3],float mass,float majorRadius,float minorRadius,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
+    void calculate_hollow_cylinder_inertia_inverse(float result[3],float mass,float R,float r,float halfHeight,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
     /** @} */ // end of inertia
 
 
@@ -1092,12 +1246,11 @@ namespace nudge {
 #       define M_180OVERPI ((float)(180.0/3.14159265358979323846))
 #   endif
 #   ifndef M_DEG2RAD
-#       define M_DEG2RAD(X)   (X*(float)M_PIOVER180)
+#       define M_DEG2RAD(X)   ((X)*(float)M_PIOVER180)
 #   endif
 #   ifndef M_RAD2DEG
-#       define M_RAD2DEG(X)   (X*(float)M_180OVERPI)
+#       define M_RAD2DEG(X)   ((X)*(float)M_180OVERPI)
 #   endif
-
 
 #   ifndef NUDGE_NO_STDIO
 #   ifdef NUDGE_USE_TIME_CONTEXT
@@ -1105,6 +1258,35 @@ namespace nudge {
     void load_time_context(FILE* f,time_context_t* c);
 #   endif //NUDGE_USE_TIME_CONTEXT
 #   endif //NUDGE_NO_STDIO
+
+#ifndef NUDGE_DEFAULT_SIMULATION_TIMESTEP
+#   define NUDGE_DEFAULT_SIMULATION_TIMESTEP (1.0/60.0)
+#endif
+#ifndef NUDGE_DEFAULT_MAX_NUM_SIMULATION_SUBSTEPS
+#   define NUDGE_DEFAULT_MAX_NUM_SIMULATION_SUBSTEPS (2) //2-10
+#endif
+#ifndef NUDGE_DEFAULT_NUM_SIMULATION_ITERATIONS
+#   define NUDGE_DEFAULT_NUM_SIMULATION_ITERATIONS (5)  //5-350
+#endif
+#ifndef NUDGE_DEFAULT_DAMPING_LINEAR
+#   define NUDGE_DEFAULT_DAMPING_LINEAR (0.25f)
+#endif
+#ifndef NUDGE_DEFAULT_DAMPING_ANGULAR
+#   define NUDGE_DEFAULT_DAMPING_ANGULAR (0.25f)
+#endif
+#ifndef NUDGE_DEFAULT_SLEEPING_THRESHOLD_LINEAR_VELOCITY_SQUARED
+#   define NUDGE_DEFAULT_SLEEPING_THRESHOLD_LINEAR_VELOCITY_SQUARED (1e-2f)
+#endif
+#ifndef NUDGE_DEFAULT_SLEEPING_THRESHOLD_ANGULAR_VELOCITY_SQUARED
+#   define NUDGE_DEFAULT_SLEEPING_THRESHOLD_ANGULAR_VELOCITY_SQUARED (1e-1f)
+#endif
+#ifndef NUDGE_DEFAULT_PENETRATION_ALLOWED_AMOUNT
+#   define NUDGE_DEFAULT_PENETRATION_ALLOWED_AMOUNT (1e-3f)
+#endif
+#ifndef NUDGE_DEFAULT_PENETRATION_BIAS_FACTOR
+#   define NUDGE_DEFAULT_PENETRATION_BIAS_FACTOR (2.0f)
+#endif
+
     //--------------------------------------------------------------------------------------------------------------------------       
 
 } // namespace nudge
@@ -1117,7 +1299,7 @@ namespace nudge {
 
 
 //--- Hack for better code completion on QtCreator (to remove? no)-------------
-#if (!defined(HELLO_WORLD_CPP_) && !defined(NUDGE_IMPLEMENTATION) && defined(NUDGE_DEVELOPMENT))
+#if (!defined(HELLO_WORLD_CPP_) && !defined(EXAMPLE02_CPP_) && !defined(NUDGE_IMPLEMENTATION) && defined(NUDGE_DEVELOPMENT))
     #define NUDGE_IMPLEMENTATION
 #endif
 //-----------------------------------------------------------------------------
@@ -2331,9 +2513,9 @@ static inline Transform operator * (Transform lhs, Transform rhs) {
     Rotation q = make_rotation(lhs.rotation) * make_rotation(rhs.rotation);
 
     Transform r = {
-        { p.x, p.y, p.z },
+        {{ p.x, p.y, p.z }},
         {rhs.body},
-        { q.v.x, q.v.y, q.v.z, q.s },
+        {{ q.v.x, q.v.y, q.v.z, q.s }},
     };
     return r;
 }
@@ -2446,7 +2628,7 @@ void nm_QuatGetAngularVelocity(float* __restrict angVel3,const float* newQuat4,c
 
     //nm_QuatDifferentiateAngularVelocityApprox(angVel3,newQuat4,oldQuat4,halfTimeStep*2.0);   // is this better?
 }
-float* nm_QuatMul(float* __restrict qOut4,const float* __restrict a4,const float* __restrict b4)  {
+float* nm_QuatMul(float* /*__restrict*/ qOut4,const float* /*__restrict*/ a4,const float* /*__restrict*/ b4)  {
 // we should activate simd, but maybe this same function is already present somewhere in the nudge code. TODO: fetch it!
 #	if (defined(NM_USE_SIMD) && defined(__SSE__))
 /*#	ifndef NM_ALIGN_STRUCTS // hope all the calls are used with aligned data... (not sure!)
@@ -2603,7 +2785,8 @@ float* nm_QuatFromAngleAxis(float* __restrict qOut4,float rfAngle,float rkAxisX,
     //
     // The quaternion representing the rotation is
     //   q = cos(A/2)+sin(A/2)*(x*i+y*j+z*k)
-    float fSin,fCos;sincosf((float)(0.5)*rfAngle,&fSin,&fCos);
+    float fSin,fCos;//sincosf((float)(0.5)*rfAngle,&fSin,&fCos);
+    const float hangle=(float)(0.5)*rfAngle;fSin=sinf(hangle),fCos=cosf(hangle);
     qOut4[3]=fCos; qOut4[0]=fSin*rkAxisX; qOut4[1]=fSin*rkAxisY; qOut4[2]=fSin*rkAxisZ;
     return qOut4;
 }
@@ -2647,11 +2830,35 @@ void TransformToMat4(float* matrix16Out,const Transform* T)    {
     for (i=0;i<3;i++) matrix16Out[12+i] = T->position[i];
     matrix16Out[3]=matrix16Out[7]=matrix16Out[11]=0.f;matrix16Out[15]=1.f;
 }
-void TransformAssignToBody(context_t* c,unsigned body,Transform newT,float deltaTime,bool add_aux_body_velocities)   {
+float* nm_QuatMulVec3(float* __restrict vOut3,const float* __restrict q4,const float* __restrict vIn3)   {
+    float uv[3],uuv[3];int i;
+    nudge::nm_Vec3Cross(uuv,q4,nm_Vec3Cross(uv,q4,vIn3));
+    for (i=0;i<3;i++) vOut3[i] = vIn3[i] + ((uv[i] * q4[3]) + uuv[i]) * (float)2;
+    return vOut3;
+}
+float* nm_QuatGetAxis(float* __restrict vOut3,const float* __restrict q4,float axisX,float axisY,float axisZ) {
+    const float vIn[3]={axisX,axisY,axisZ};
+    return nm_QuatMulVec3(vOut3,q4,vIn);
+    /* Other stuff that we can do if input axis is {0,1,0}:
+        // direct calculation
+        //vOut3[0] = 2.f*(q4[0]*q4[2]+q4[3]*q4[1]);
+        //vOut3[1] = 2.f*(q4[1]*q4[2]-q4[3]*q4[0]);
+        //vOut3[2] = 1.f-2.f*(q4[0]*q4[0]+q4[1]*q4[1]);
+
+        // or this
+        float angle,axis[3];nm_QuatToAngleAxis(q4,&angle,axis);    // if we know that 'axis' is (0,1,0) in advance, we can ignore it
+        //angle*=axis[1]; // axis[1] can be 1 or -1 AFAICS [useless if quat axis y is always axis[1]==1]
+        vOut3[0]=sinf(angle),vOut3[1]=0.f,vOut3[2]=cosf(angle); // however I'm not too sure this is faster than the other methods...
+    */
+}
+float* nm_QuatRotate(float* __restrict qInOut4,float angle,float axisX,float axisY,float axisZ) {
+    float qa[4];nm_QuatFromAngleAxis(qa,angle,axisX,axisY,axisZ);
+    return nm_QuatMul(qInOut4,qInOut4,qa);
+}
+void TransformAssignToBody(context_t* c,unsigned body,Transform newT,float deltaTime,int16_t aux_body)   {
     assert(c && body<c->bodies.count);
     BodyFilter* filter = &c->bodies.filters[body];
     const FlagMask flags = filter->flags;
-    const int32_t aux_body = add_aux_body_velocities ? filter->aux_body : -1;
     Transform* T = &c->bodies.transforms[body];
     float* P = newT.position;float* Q = newT.rotation;
     // calculate velocities
@@ -2695,7 +2902,7 @@ void TransformAssignToBody(context_t* c,unsigned body,Transform newT,float delta
         memcpy(T->rotation,Q,4*sizeof(float));
     }
     if (flags&BF_IS_DYNAMIC)
-        filter->idle_counter=0;   // this prevents sleeping (but does not improve things if body has a negative mass
+        c->bodies.idle_counters[body]=0;   // this prevents sleeping (but does not improve things if body has a negative mass
 }
 void TransformAdvanceBodyFromVelocities(context_t* c,unsigned body,float deltaTime)    {
     // advance Transform based on lin and ang velocities
@@ -2712,7 +2919,7 @@ void TransformAdvanceBodyFromVelocities(context_t* c,unsigned body,float deltaTi
         for (int l=0;l<3;l++)   {newT->position[l]=oldT.position[l]+linvel[l]*deltaTime;}
         nm_QuatAdvance(newT->rotation,oldT.rotation,angvel,deltaTime*0.5f);
     }
-    else if (flags&BF_IS_DYNAMIC) c->bodies.filters[body].idle_counter=0;  // wake up dynamic object
+    else if (flags&BF_IS_DYNAMIC) c->bodies.idle_counters[body]=0;  // wake up dynamic object
 }
 
 Transform TransformSlerp(Transform T0,Transform T1,float time)  {
@@ -2738,16 +2945,16 @@ void calculate_box_inertia_inverse(float result[3],float mass,float hsizex,float
     }
     else memset(result, 0, 3*sizeof(float));
 }
-void calculate_sphere_inertia(float result[3],float mass,float radius,const float comOffset[3])  {
+void calculate_sphere_inertia(float result[3], float mass, float radius, const float comOffset[3], bool hollow)  {
     if (mass>0.f)   {
-        result[0] = result[1] = result[2] = (mass*radius*radius)/2.5f;
+        result[0] = result[1] = result[2] = (mass*radius*radius)/(hollow?1.5f:2.5f);
         if (comOffset) {for (int l=0;l<3;l++)   result[l]+=mass*comOffset[l]*comOffset[l];} // hope it's correct
     }
     else memset(result, 0, 3*sizeof(float));
 }
-void calculate_sphere_inertia_inverse(float result[3],float mass,float radius,const float comOffset[3])  {
+void calculate_sphere_inertia_inverse(float result[3], float mass, float radius, const float comOffset[3], bool hollow)  {
     if (mass>0.f)   {
-        calculate_sphere_inertia(result,mass,radius,comOffset);
+        calculate_sphere_inertia(result,mass,radius,comOffset,hollow);
         for (int i=0;i<3;i++) result[i] = 1.f/result[i];
     }
     else memset(result, 0, 3*sizeof(float));
@@ -2769,6 +2976,66 @@ void calculate_cylinder_inertia_inverse(float result[3],float mass,float radius,
     }
     else memset(result, 0, 3*sizeof(float));
 }
+void calculate_capsule_inertia(float result[3],float mass,float radius,float halfCylinderHeight,unsigned short upAxisIn0_2,const float comOffset[3])  {
+    // based on https://xissburg.github.io/2022-10-01-calculating-moment-of-inertia-capsule/
+    if (mass>0.f)   {
+        const float L = 2.f*halfCylinderHeight;
+        float radius2 = radius*radius;
+        const float Vcyl = M_PI*radius2*L, Vhem = 2.0f*M_PI*radius2*radius;const float Vtot = Vcyl + 2.f*Vhem;
+        const float Mcyl = mass*Vcyl/Vtot, Mhem = mass*Vhem/Vtot;
+        const float Icyl = Mcyl*(L*L+3.f*radius2)/12.f;
+        const float Ihem = Mhem*radius2/2.5f;
+        assert(upAxisIn0_2<3);
+        result[0] = result[1] = result[2] = Icyl + 2.f*Ihem + Mhem*(4.f*L+3*radius)*(4.f*L+3*radius)/32.f;
+        result[upAxisIn0_2] = (5.f*Mcyl+8.f*Mhem)*radius2*0.1f;
+        if (comOffset) {for (int l=0;l<3;l++)   result[l]+=mass*comOffset[l]*comOffset[l];} // hope it's correct
+    }
+    else memset(result, 0, 3*sizeof(float));
+}
+void calculate_capsule_inertia_inverse(float result[3],float mass,float radius,float halfCylinderHeight,unsigned short upAxisIn0_2,const float comOffset[3])  {
+    if (mass>0.f)   {
+        calculate_capsule_inertia(result,mass,radius,halfCylinderHeight,upAxisIn0_2,comOffset);
+        for (int i=0;i<3;i++) result[i] = 1.f/result[i];
+    }
+    else memset(result, 0, 3*sizeof(float));
+}
+/**
+ * @brief calculate_hollow_cylinder_inertia
+ * @param result
+ * @param mass
+ * @param R the total radius of the cylinder (including the border depth)
+ * @param r must be: R-border_depth
+ * @param halfHeight
+ * @param upAxisIn0_2
+ * @param comOffset
+ */
+void calculate_hollow_cylinder_inertia(float result[3],float mass,float R,float r,float halfHeight,unsigned short upAxisIn0_2,const float comOffset[3])  {
+    // same as calculate_cylinder_inertia, but with: radius = sqrtf(R*R+r*r)
+    if (mass>0.f)   {
+        float radius2 = R*R+r*r,  h2 = halfHeight*halfHeight*4.f;
+        assert(upAxisIn0_2<3);
+        result[0] = result[1] = result[2] = mass*(3.f*radius2+h2)/12.f;
+        result[upAxisIn0_2] = mass*radius2/2.f;
+        if (comOffset) {for (int l=0;l<3;l++)   result[l]+=mass*comOffset[l]*comOffset[l];} // hope it's correct
+    }
+    else memset(result, 0, 3*sizeof(float));
+}
+void calculate_hollow_cylinder_inertia_inverse(float result[3],float mass,float R,float r,float halfHeight,unsigned short upAxisIn0_2,const float comOffset[3])  {
+    if (mass>0.f)   {
+        calculate_hollow_cylinder_inertia(result,mass,R,r,halfHeight,upAxisIn0_2,comOffset);
+        for (int i=0;i<3;i++) result[i] = 1.f/result[i];
+    }
+    else memset(result, 0, 3*sizeof(float));
+}
+/**
+ * @brief calculate_torus_inertia
+ * @param result
+ * @param mass
+ * @param majorRadius radius of the torus ( 0|-----------|--->R    | )
+ * @param minorRadius radius of the circle ( 0|           |<---R    | )
+ * @param upAxisIn0_2
+ * @param comOffset
+ */
 void calculate_torus_inertia(float result[3],float mass,float majorRadius,float minorRadius,unsigned short upAxisIn0_2,const float comOffset[3])  {
     if (mass>0.f)   {
         float a2 = minorRadius*minorRadius,  b2 = majorRadius*majorRadius;
@@ -2906,6 +3173,71 @@ void kinematic_data_reserve_animations(KinematicData* kd, size_t new_size) {
 }
 
 
+
+void restart_context(context_t* c) {
+#   ifndef NUDGE_DEFAULT_GRAVITY
+#      define NUDGE_DEFAULT_GRAVITY (-9.82f)
+#   endif
+#   ifndef NUDGE_DEFAULT_FRICTION
+#      define NUDGE_DEFAULT_FRICTION (1.f)
+#   endif
+    assert(c && c->MAX_NUM_BODIES==c->MAX_NUM_SPHERES+c->MAX_NUM_BOXES && c->MAX_NUM_SPHERES>0 && c->MAX_NUM_BOXES>0);
+    memset(c->bodies.idle_counters,0,sizeof(uint8_t)*c->MAX_NUM_BODIES);
+    memset(c->colliders.boxes.data,0,sizeof(SphereCollider)*c->MAX_NUM_BOXES);
+    memset(c->colliders.spheres.data,0,sizeof(SphereCollider)*c->MAX_NUM_SPHERES);
+    memset(c->kinematic_data.animations,0,sizeof(KinematicData::Animation)*c->kinematic_data.animations_capacity);
+    memset(c->kinematic_data.key_frame_transforms,0,sizeof(Transform)*c->kinematic_data.key_frame_capacity);
+    memset(c->kinematic_data.key_frame_modes,0,sizeof(KinematicData::TimeMode)*c->kinematic_data.key_frame_capacity);
+    c->active_bodies.count=0;
+    c->bodies.count=0;
+    c->colliders.boxes.count = 0;
+    for (uint16_t i=0;i<c->MAX_NUM_BOXES;i++)    {c->colliders.boxes.tags[i] = i;}
+    c->colliders.spheres.count = 0;
+    for (uint16_t i=0;i<c->MAX_NUM_SPHERES;i++)    {c->colliders.spheres.tags[i] = NUDGE_START_SPHERE_TAG+i;}
+    c->contact_cache.count=0;assert(c->contact_cache.capacity>0);
+    c->contact_data.count=0;assert(c->contact_data.capacity>0);
+    c->global_data.removed_bodies_count = c->global_data.finalized_removed_bodies_count = 0;assert(c->global_data.removed_bodies_capacity>0);
+    c->kinematic_data.key_frame_count=0;
+    c->kinematic_data.animations_count=0;
+    for (uint32_t i=0;i<c->kinematic_data.key_frame_capacity;i++)    {
+        c->kinematic_data.key_frame_transforms[i] = identity_transform;
+        c->kinematic_data.key_frame_modes[i]=KinematicData::TM_NORMAL;
+    }
+    for (uint32_t i=0;i<c->kinematic_data.animations_capacity;i++)   {
+        KinematicData::Animation* m = &c->kinematic_data.animations[i];
+        m->baseT = identity_transform;
+        m->loop_mode = KinematicData::Animation::LM_LOOP_NORMAL;
+        m->total_time = m->play_time = -1.f;
+        m->speed = 1.f;
+    }
+    for (unsigned i=0;i<c->MAX_NUM_BODIES;i++)    {
+        BodyInfo* info = &c->bodies.infos[i];
+        BodyProperties* property = &c->bodies.properties[i];
+        BodyFilter* filter = &c->bodies.filters[i];
+        BodyLayout* layout = &c->bodies.layouts[i];
+        memset(info,0,sizeof(BodyInfo));
+        memset(property,0,sizeof(BodyProperties));
+        memset(filter,0,sizeof(BodyFilter));
+        memset(layout,0,sizeof(BodyLayout));
+        layout->first_box_index=layout->first_sphere_index=-1;
+        property->gravity[1] = NUDGE_DEFAULT_GRAVITY;
+        property->friction = NUDGE_DEFAULT_FRICTION;
+        filter->flags=0;
+        filter->collision_group=COLLISION_GROUP_DEFAULT;
+        filter->collision_mask=COLLISION_GROUP_ALL;
+#       if NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS>0
+        for (int ab=0;ab<NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS;ab++) info->aux_bodies[ab] = -1;
+#       endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS
+    }
+
+    SimulationParams* sp = &c->simulation_params;
+    sp->numsubsteps_overflow_in_last_frame=0;
+    sp->num_substeps_in_last_frame=0;
+    sp->remaining_time_in_seconds=0;
+    sp->time_step_minus_remaining_time=0;
+
+    //sp->num_total_substeps=sp->num_frames = 0;
+}
 void init_context_with(context_t* c,unsigned MAX_NUM_BOXES,unsigned MAX_NUM_SPHERES)   {
 #if (!defined(__EMSCRIPTEN__) && !defined(NUDGE_USE_SIMDE))	// TODO: #if (defined(__EMSCRIPTEN__) || (defined(NUDGE_USE_SIMDE) && defined(SIMDE_SSE_NO_NATIVE)))
     // Disable denormals for performance.
@@ -2918,44 +3250,12 @@ void init_context_with(context_t* c,unsigned MAX_NUM_BOXES,unsigned MAX_NUM_SPHE
 #endif //NUDGE_USE_SIMDE
 #endif //__EMSCRIPTEN__
 
-#ifndef NUDGE_DEFAULT_SIMULATION_TIMESTEP
-#   define NUDGE_DEFAULT_SIMULATION_TIMESTEP (1.0/60.0)
-#endif
-#ifndef NUDGE_DEFAULT_MAX_NUM_SIMULATION_SUBSTEPS
-#   define NUDGE_DEFAULT_MAX_NUM_SIMULATION_SUBSTEPS (2) //2-10
-#endif
-#ifndef NUDGE_DEFAULT_NUM_SIMULATION_ITERATIONS
-#   define NUDGE_DEFAULT_NUM_SIMULATION_ITERATIONS (5)  //5-350
-#endif
 #ifndef NUDGE_ARENA_SIZE_MACRO
 #   define NUDGE_ARENA_SIZE_MACRO(MAX_NUM_BODIES)  (512000+50*(MAX_NUM_BODIES)*(MAX_NUM_BODIES))//(64*1024*1024) //(48*NUDGE_MAX_NUM_BODIES*NUDGE_MAX_NUM_BODIES/4)//(64*1024*1024)
 #endif
-#ifndef NUDGE_DEFAULT_DAMPING_LINEAR
-#   define NUDGE_DEFAULT_DAMPING_LINEAR (0.25f)
-#endif
-#ifndef NUDGE_DEFAULT_DAMPING_ANGULAR
-#   define NUDGE_DEFAULT_DAMPING_ANGULAR (0.25f)
-#endif
-#ifndef NUDGE_DEFAULT_SLEEPING_THRESHOLD_LINEAR_VELOCITY_SQUARED
-#   define NUDGE_DEFAULT_SLEEPING_THRESHOLD_LINEAR_VELOCITY_SQUARED (1e-2f)
-#endif
-#ifndef NUDGE_DEFAULT_SLEEPING_THRESHOLD_ANGULAR_VELOCITY_SQUARED
-#   define NUDGE_DEFAULT_SLEEPING_THRESHOLD_ANGULAR_VELOCITY_SQUARED (1e-1f);
-#endif
-#ifndef NUDGE_DEFAULT_GRAVITY
-#   define NUDGE_DEFAULT_GRAVITY (-9.82f)
-#endif
-#ifndef NUDGE_DEFAULT_FRICTION
-#   define NUDGE_DEFAULT_FRICTION (1.f)
-#endif
-#ifndef NUDGE_DEFAULT_PENETRATION_ALLOWED_AMOUNT
-#   define NUDGE_DEFAULT_PENETRATION_ALLOWED_AMOUNT (1e-3f)
-#endif
-#ifndef NUDGE_DEFAULT_PENETRATION_BIAS_FACTOR
-#   define NUDGE_DEFAULT_PENETRATION_BIAS_FACTOR (2.0f)
-#endif
 
     assert(c);
+    assert(c->MAX_NUM_BODIES==0);
     assert((MAX_NUM_BOXES+MAX_NUM_SPHERES<=8192) && "nudge has a upper limit on the number of colliders: (MAX_NUM_BOXES+MAX_NUM_SPHERES<=8192).");    // nudge has a upper limit on the number of colliders: (MAX_NUM_BOXES+MAX_NUM_SPHERES<=8192)
     //memset(&c,0,sizeof(context_t));
 
@@ -2973,47 +3273,44 @@ void init_context_with(context_t* c,unsigned MAX_NUM_BOXES,unsigned MAX_NUM_SPHE
     assert(sp->time_step>0);
     if (sp->max_num_substeps<=0) sp->max_num_substeps = NUDGE_DEFAULT_MAX_NUM_SIMULATION_SUBSTEPS;
     assert(sp->max_num_substeps>0);
-    if (sp->num_iterations_per_time_step<=0) sp->num_iterations_per_time_step = NUDGE_DEFAULT_NUM_SIMULATION_ITERATIONS;
-    assert(sp->num_iterations_per_time_step>0);
+    if (sp->num_iterations_per_substep<=0) sp->num_iterations_per_substep = NUDGE_DEFAULT_NUM_SIMULATION_ITERATIONS;
+    assert(sp->num_iterations_per_substep>0);
     if (sp->sleeping_threshold_linear_velocity_squared<=0.f) sp->sleeping_threshold_linear_velocity_squared = NUDGE_DEFAULT_SLEEPING_THRESHOLD_LINEAR_VELOCITY_SQUARED;
     if (sp->sleeping_threshold_angular_velocity_squared<=0.f) sp->sleeping_threshold_angular_velocity_squared = NUDGE_DEFAULT_SLEEPING_THRESHOLD_ANGULAR_VELOCITY_SQUARED;
     if (sp->linear_damping<=0.f) sp->linear_damping = NUDGE_DEFAULT_DAMPING_LINEAR;
     if (sp->angular_damping<=0.f) sp->angular_damping = NUDGE_DEFAULT_DAMPING_ANGULAR;
     if (sp->penetration_allowed_amount<=0) sp->penetration_allowed_amount = NUDGE_DEFAULT_PENETRATION_ALLOWED_AMOUNT;
     if (sp->penetration_bias_factor<=0) sp->penetration_bias_factor = NUDGE_DEFAULT_PENETRATION_BIAS_FACTOR;
-
+    if (sp->numsubsteps_overflow_warning_mode>2) sp->numsubsteps_overflow_warning_mode=0;
+    sp->num_total_substeps=sp->num_frames=0;
 
     // Allocate memory for simulation arena.
 #   ifndef NUDGE_ARENA_SIZE_ALIGNMENT
 #       define NUDGE_ARENA_SIZE_ALIGNMENT (4096)      // is this correct? Isn't 4096 too much?
 #   endif
+    assert(c->arena.size==0);assert(c->arena.data==NULL);  // sharing it could be useful, we should allow it and add an 'owned' flag
     c->arena.size = NUDGE_ARENA_SIZE_MACRO(NUDGE_MAX_NUM_BODIES);
     c->arena.data = _mm_malloc(c->arena.size, NUDGE_ARENA_SIZE_ALIGNMENT);//memset(c->arena.data,0,c->arena.size);
 
     // Allocate memory for bodies, colliders, and contacts.
     c->active_bodies.capacity = NUDGE_MAX_NUM_BODIES;
     c->active_bodies.indices = static_cast<uint16_t*>(_mm_malloc(sizeof(uint16_t)*NUDGE_MAX_NUM_BODIES, 64));
-    c->active_bodies.count = 0;
 
     c->bodies.transforms = static_cast<Transform*>(_mm_malloc(sizeof(Transform)*NUDGE_MAX_NUM_BODIES, 64));
     c->bodies.momentum = static_cast<BodyMomentum*>(_mm_malloc(sizeof(BodyMomentum)*NUDGE_MAX_NUM_BODIES, 64));
     c->bodies.properties = static_cast<BodyProperties*>(_mm_malloc(sizeof(BodyProperties)*NUDGE_MAX_NUM_BODIES, 64));
     c->bodies.filters = static_cast<BodyFilter*>(_mm_malloc(sizeof(BodyFilter)*NUDGE_MAX_NUM_BODIES, 64));
-    c->bodies.infos = static_cast<BodyInfo*>(_mm_malloc(sizeof(BodyInfo)*NUDGE_MAX_NUM_BODIES,64));
-    c->bodies.count = 0;
-    c->global_data.flags = GF_SMOOTH_GRAPHIC_TRANSFORMS;c->global_data.gravity[0]=c->global_data.gravity[2]=0.f;c->global_data.gravity[1]=NUDGE_DEFAULT_GRAVITY;
+    c->bodies.layouts = static_cast<BodyLayout*>(_mm_malloc(sizeof(BodyLayout)*NUDGE_MAX_NUM_BODIES, 64));
+    c->bodies.idle_counters = static_cast<uint8_t*>(_mm_malloc(sizeof(uint8_t)*NUDGE_MAX_NUM_BODIES, 64));
+    c->bodies.infos = static_cast<BodyInfo*>(_mm_malloc(sizeof(BodyInfo)*NUDGE_MAX_NUM_BODIES,64));    
 
     c->colliders.boxes.data = static_cast<BoxCollider*>(_mm_malloc(sizeof(BoxCollider)*NUDGE_MAX_NUM_BOXES, 64));
     c->colliders.boxes.tags = static_cast<uint16_t*>(_mm_malloc(sizeof(uint16_t)*NUDGE_MAX_NUM_BOXES, 64));
-    c->colliders.boxes.transforms = static_cast<Transform*>(_mm_malloc(sizeof(Transform)*NUDGE_MAX_NUM_BOXES, 64));
-    c->colliders.boxes.count = 0;
-    for (uint16_t i=0;i<NUDGE_MAX_NUM_BOXES;i++)    {c->colliders.boxes.tags[i] = i;}
+    c->colliders.boxes.transforms = static_cast<Transform*>(_mm_malloc(sizeof(Transform)*NUDGE_MAX_NUM_BOXES, 64));        
 
     c->colliders.spheres.data = static_cast<SphereCollider*>(_mm_malloc(sizeof(SphereCollider)*NUDGE_MAX_NUM_SPHERES, 64));
     c->colliders.spheres.tags = static_cast<uint16_t*>(_mm_malloc(sizeof(uint16_t)*NUDGE_MAX_NUM_SPHERES, 64));
     c->colliders.spheres.transforms = static_cast<Transform*>(_mm_malloc(sizeof(Transform)*NUDGE_MAX_NUM_SPHERES, 64));
-    c->colliders.spheres.count = 0;
-    for (uint16_t i=0;i<NUDGE_MAX_NUM_SPHERES;i++)    {c->colliders.spheres.tags[i] = NUDGE_START_SPHERE_TAG+i;}
 
     c->contact_data.capacity = NUDGE_MAX_NUM_BODIES*64;
     c->contact_data.bodies = static_cast<BodyPair*>(_mm_malloc(sizeof(BodyPair)*c->contact_data.capacity, 64));
@@ -3030,45 +3327,20 @@ void init_context_with(context_t* c,unsigned MAX_NUM_BOXES,unsigned MAX_NUM_SPHE
     c->kinematic_data.key_frame_modes = static_cast<KinematicData::TimeMode*>(_mm_malloc(sizeof(KinematicData::TimeMode)*c->kinematic_data.key_frame_capacity,64));
     c->kinematic_data.animations_capacity = NUDGE_MAX_NUM_KINEMATIC_ANIMATIONS;
     c->kinematic_data.animations = static_cast<KinematicData::Animation*>(_mm_malloc(sizeof(KinematicData::Animation)*c->kinematic_data.animations_capacity,64));
-    c->kinematic_data.animations_count = 0;
-    for (uint32_t i=0;i<c->kinematic_data.key_frame_capacity;i++)    {
-        c->kinematic_data.key_frame_transforms[i] = identity_transform;
-        c->kinematic_data.key_frame_modes[i]=KinematicData::TM_NORMAL;
-    }
-    memset(c->kinematic_data.animations,0,sizeof(KinematicData::Animation)*c->kinematic_data.animations_capacity);
-    for (uint32_t i=0;i<c->kinematic_data.animations_capacity;i++)   {
-        KinematicData::Animation* m = &c->kinematic_data.animations[i];
-        m->baseT = identity_transform;
-        m->loop_mode = KinematicData::Animation::LM_LOOP_NORMAL;
-        m->total_time = m->play_time = -1.f;
-        m->speed = 1.f;
-    }
 
-    *((uint32_t*)&c->global_data.removed_bodies_capacity) = NUDGE_MAX_NUM_BODIES;
+    *((uint32_t*)&c->global_data.removed_bodies_capacity) = NUDGE_MAX_NUM_BODIES;assert(c->global_data.removed_bodies_capacity==NUDGE_MAX_NUM_BODIES);
     c->global_data.removed_bodies = static_cast<uint32_t*>(_mm_malloc(sizeof(uint32_t)*c->global_data.removed_bodies_capacity, 64));
-    c->global_data.removed_bodies_count = c->global_data.finalized_removed_bodies_count = 0;
+    c->global_data.flags = 0;
+    c->global_data.exclude_smoothing_graphic_transform_flags=0;
+    c->global_data.gravity[0]=c->global_data.gravity[2]=0.f;
+    c->global_data.gravity[1]=NUDGE_DEFAULT_GRAVITY;
 
-    for (unsigned i=0;i<NUDGE_MAX_NUM_BODIES;i++)    {
-         BodyInfo* info = &c->bodies.infos[i];
-         BodyProperties* property = &c->bodies.properties[i];
-         BodyFilter* filter = &c->bodies.filters[i];
-         memset(info,0,sizeof(BodyInfo));
-         memset(property,0,sizeof(BodyProperties));
-         memset(filter,0,sizeof(BodyFilter));
-
-         info->first_box_index=info->first_sphere_index=-1;         
-
-         property->gravity[1] = NUDGE_DEFAULT_GRAVITY;
-         property->friction = NUDGE_DEFAULT_FRICTION;
-
-         filter->flags=0;
-         filter->collision_group=COLLISION_GROUP_DEFAULT;
-         filter->collision_mask=COLLISION_GROUP_ALL;
-         filter->aux_body = -1;
-    }
+    restart_context(c);
 }
 void init_context(context_t* c) {init_context_with(c,NUDGE_DEFAULT_MAX_NUM_BOXES,NUDGE_DEFAULT_MAX_NUM_SPHERES);}
 void destroy_context(context_t* c)   {
+    assert(c->MAX_NUM_BODIES>0);
+    assert(c->global_data.removed_bodies_capacity>0 && c->global_data.removed_bodies);
     _mm_free(c->global_data.removed_bodies);c->global_data.removed_bodies_count = c->global_data.finalized_removed_bodies_count = 0;
     *((uint32_t*)&c->global_data.removed_bodies_capacity) = 0;
 
@@ -3085,7 +3357,7 @@ void destroy_context(context_t* c)   {
     _mm_free(c->contact_data.data);c->contact_data.data = 0;
     _mm_free(c->contact_data.tags);c->contact_data.tags = 0;
     _mm_free(c->contact_data.sleeping_pairs);c->contact_data.sleeping_pairs = 0;
-    c->contact_data.capacity = 0;
+    c->contact_data.count = c->contact_data.capacity = 0;
 
     _mm_free(c->colliders.spheres.data);c->colliders.spheres.data = 0;
     _mm_free(c->colliders.spheres.tags);c->colliders.spheres.tags = 0;
@@ -3098,7 +3370,9 @@ void destroy_context(context_t* c)   {
     c->colliders.boxes.count = 0;
 
     _mm_free(c->bodies.infos);c->bodies.infos = 0;
+    _mm_free(c->bodies.idle_counters);c->bodies.idle_counters = 0;
     _mm_free(c->bodies.filters);c->bodies.filters = 0;
+    _mm_free(c->bodies.layouts);c->bodies.layouts = 0;
     _mm_free(c->bodies.transforms);c->bodies.transforms = 0;
     _mm_free(c->bodies.momentum);c->bodies.momentum = 0;
     _mm_free(c->bodies.properties);c->bodies.properties = 0;
@@ -3109,6 +3383,9 @@ void destroy_context(context_t* c)   {
 
     _mm_free(c->arena.data);c->arena.data = 0;
     c->arena.size = 0;
+
+    //memset(c,0,sizeof(*c));
+    *((unsigned*)&c->MAX_NUM_BODIES) = *((unsigned*)&c->MAX_NUM_BOXES) = *((unsigned*)&c->MAX_NUM_SPHERES) =0;
 }
 
 
@@ -3119,7 +3396,7 @@ static inline int _compare_bodies_by_box_collider(const void* av,const void*bv) 
     assert(_tmpc);
     assert(a<_tmpc->bodies.count);
     assert(b<_tmpc->bodies.count);
-    const int aa=_tmpc->bodies.infos[a].first_box_index,bb=_tmpc->bodies.infos[b].first_box_index;
+    const int aa=_tmpc->bodies.layouts[a].first_box_index,bb=_tmpc->bodies.layouts[b].first_box_index;
     return (aa<bb)?-1:(aa>bb)?1:0;
 }
 static inline int _compare_bodies_by_sphere_collider(const void* av,const void*bv) {
@@ -3127,7 +3404,7 @@ static inline int _compare_bodies_by_sphere_collider(const void* av,const void*b
     assert(_tmpc);
     assert(a<_tmpc->bodies.count);
     assert(b<_tmpc->bodies.count);
-    const int aa=_tmpc->bodies.infos[a].first_sphere_index,bb=_tmpc->bodies.infos[b].first_sphere_index;
+    const int aa=_tmpc->bodies.layouts[a].first_sphere_index,bb=_tmpc->bodies.layouts[b].first_sphere_index;
     return (aa<bb)?-1:(aa>bb)?1:0;
 }
 void finalize_removed_bodies(context_t* c) {
@@ -3147,7 +3424,7 @@ void finalize_removed_bodies(context_t* c) {
     assert(sizeof(body_type)==sizeof(c->global_data.removed_bodies[0]));
     body_type* removed_bodies = &c->global_data.removed_bodies[0];
     int16_t start;uint16_t count;
-    BodyInfo* infos = c->bodies.infos;
+    BodyLayout* layouts = c->bodies.layouts;
     uint32_t num_boxes_to_remove=0,num_spheres_to_remove=0;int i;
     uint32_t max_num_allocated_tags = 0;
     Arena arena = c->arena;
@@ -3156,13 +3433,13 @@ void finalize_removed_bodies(context_t* c) {
     // [pre-processing for arena allocation]
     for (i=removed_bodies_count-1;i>=finalized_removed_bodies_count;--i) {
         const body_type body = removed_bodies[i];assert(body<c->bodies.count);
-        const uint16_t num_boxes=infos[body].num_boxes;
-        const uint16_t num_spheres=infos[body].num_spheres;
+        const uint16_t num_boxes=layouts[body].num_boxes;
+        const uint16_t num_spheres=layouts[body].num_spheres;
         num_boxes_to_remove+=num_boxes;
         num_spheres_to_remove+=num_spheres;
         // dbg:
-        if (num_boxes>0) {assert(infos[body].first_box_index>=0);}
-        if (num_spheres>0) {assert(infos[body].first_sphere_index>=0);}
+        if (num_boxes>0) {assert(layouts[body].first_box_index>=0);}
+        if (num_spheres>0) {assert(layouts[body].first_sphere_index>=0);}
 
         if (clean_active_bodies && c->active_bodies.count) {
             for (int j=(int)(c->active_bodies.count-1);j>=0;--j) {
@@ -3201,12 +3478,12 @@ void finalize_removed_bodies(context_t* c) {
         // process
         uint32_t num_finalized_boxes=0;unsigned moveGap,amount,lastBodyId;
         const body_type last_body = removed_bodies[removed_bodies_count-1];
-        start=infos[last_body].first_box_index;count=infos[last_body].num_boxes;
+        start=layouts[last_body].first_box_index;count=layouts[last_body].num_boxes;
         for (i=removed_bodies_count-1;i>=finalized_removed_bodies_count;--i) {
             if (i>finalized_removed_bodies_count)   {
                 const body_type body = removed_bodies[i-1]; // prev_body actually (next in the for loop)
-                const int16_t body_start = infos[body].first_box_index;
-                const uint16_t body_count = infos[body].num_boxes;
+                const int16_t body_start = layouts[body].first_box_index;
+                const uint16_t body_count = layouts[body].num_boxes;
                 if (body_start+body_count==start) {start=body_start;count+=body_count;continue;}
             }
             if (count>0)    {
@@ -3253,20 +3530,20 @@ void finalize_removed_bodies(context_t* c) {
                     assert(!(c->bodies.filters[bodyId].flags&BF_IS_REMOVED));   // not sure about this
                     if (lastBodyId!=bodyId)   {
                         lastBodyId=bodyId;
-                        BodyInfo* bi = &c->bodies.infos[bodyId];
-                        assert(bi->first_box_index>=0 && bi->num_boxes>0);
-                        assert(bi->first_box_index>=start+count);
-                        assert((int16_t)i==bi->first_box_index-(int16_t)count);
-                        bi->first_box_index = (int16_t) i;
-                        assert((uint16_t)bi->first_box_index+bi->num_boxes<=c->colliders.boxes.count);
+                        BodyLayout* bl = &c->bodies.layouts[bodyId];
+                        assert(bl->first_box_index>=0 && bl->num_boxes>0);
+                        assert(bl->first_box_index>=start+count);
+                        assert((int16_t)i==bl->first_box_index-(int16_t)count);
+                        bl->first_box_index = (int16_t) i;
+                        assert((uint16_t)bl->first_box_index+bl->num_boxes<=c->colliders.boxes.count);
                     }
                 }
             }
             //---------------------------------------------
             if (i>finalized_removed_bodies_count)   {
                 const body_type body = removed_bodies[i-1]; // prev_body actually (next in the for loop)
-                start = infos[body].first_box_index;
-                count = infos[body].num_boxes;
+                start = layouts[body].first_box_index;
+                count = layouts[body].num_boxes;
             }
         }
         if (num_finalized_boxes!=num_boxes_to_remove) {
@@ -3283,12 +3560,12 @@ void finalize_removed_bodies(context_t* c) {
         // process
         uint32_t num_finalized_spheres=0;unsigned moveGap,amount,lastBodyId;
         const body_type last_body = removed_bodies[removed_bodies_count-1];
-        start=infos[last_body].first_sphere_index;count=infos[last_body].num_spheres;
+        start=layouts[last_body].first_sphere_index;count=layouts[last_body].num_spheres;
         for (i=removed_bodies_count-1;i>=finalized_removed_bodies_count;--i) {
             if (i>finalized_removed_bodies_count)   {
                 const body_type body = removed_bodies[i-1]; // prev_body actually (next in the for loop)
-                const int16_t body_start = infos[body].first_sphere_index;
-                const uint16_t body_count = infos[body].num_spheres;
+                const int16_t body_start = layouts[body].first_sphere_index;
+                const uint16_t body_count = layouts[body].num_spheres;
                 if (body_start+body_count==start) {start=body_start;count+=body_count;continue;}
             }
             if (count>0)    {
@@ -3335,20 +3612,20 @@ void finalize_removed_bodies(context_t* c) {
                     assert(!(c->bodies.filters[bodyId].flags&BF_IS_REMOVED));
                     if (lastBodyId!=bodyId)   {
                         lastBodyId=bodyId;
-                        BodyInfo* bi = &c->bodies.infos[bodyId];
-                        assert(bi->first_sphere_index>=0 && bi->num_spheres>0);
-                        assert(bi->first_sphere_index>=start+count);
-                        assert((int16_t)i==bi->first_sphere_index-(int16_t)count);
-                        bi->first_sphere_index = (int16_t) i;
-                        assert((uint16_t)bi->first_sphere_index+bi->num_spheres<=c->colliders.spheres.count);
+                        BodyLayout* bl = &c->bodies.layouts[bodyId];
+                        assert(bl->first_sphere_index>=0 && bl->num_spheres>0);
+                        assert(bl->first_sphere_index>=start+count);
+                        assert((int16_t)i==bl->first_sphere_index-(int16_t)count);
+                        bl->first_sphere_index = (int16_t) i;
+                        assert((uint16_t)bl->first_sphere_index+bl->num_spheres<=c->colliders.spheres.count);
                     }
                 }
             }
             //---------------------------------------------
             if (i>finalized_removed_bodies_count)   {
                 const body_type body = removed_bodies[i-1]; // prev_body actually (next in the for loop)
-                start = infos[body].first_sphere_index;
-                count = infos[body].num_spheres;
+                start = layouts[body].first_sphere_index;
+                count = layouts[body].num_spheres;
             }
         }
         if (num_finalized_spheres!=num_spheres_to_remove) {
@@ -3361,8 +3638,9 @@ void finalize_removed_bodies(context_t* c) {
     // remove colliders from removed objects
     for (int i=finalized_removed_bodies_count;i<removed_bodies_count;i++) {
         const body_type body = removed_bodies[i];
-        c->bodies.infos[body].first_box_index=-1;c->bodies.infos[body].first_sphere_index=-1;// or 0?
-        c->bodies.infos[body].num_boxes=0;c->bodies.infos[body].num_spheres=0;
+        BodyLayout* bl = &c->bodies.layouts[body];
+        bl->first_box_index=-1;bl->first_sphere_index=-1;// or 0?
+        bl->num_boxes=0;bl->num_spheres=0;
     }
     c->global_data.finalized_removed_bodies_count=c->global_data.removed_bodies_count;
 
@@ -3441,17 +3719,17 @@ void finalize_removed_bodies(context_t* c) {
             //const uint16_t tag = &c->colliders.boxes.tags[i];
             const unsigned body = c->colliders.boxes.transforms[i].body;
             assert(body<c->bodies.count);
-            BodyInfo* bi = &c->bodies.infos[body];
+            BodyLayout* bl = &c->bodies.layouts[body];
             if (body_last!=body)   {
                 body_last=body;
-                assert(bi->first_box_index==(int)i);
+                assert(bl->first_box_index==(int)i);
                 delta_shape_count=0;
             }
             else {
                 ++delta_shape_count;
-                assert(i>=(uint16_t)bi->first_box_index);
-                assert(i<(uint16_t)bi->first_box_index+bi->num_boxes);
-                assert(i==(uint16_t)bi->first_box_index+delta_shape_count);
+                assert(i>=(uint16_t)bl->first_box_index);
+                assert(i<(uint16_t)bl->first_box_index+bl->num_boxes);
+                assert(i==(uint16_t)bl->first_box_index+delta_shape_count);
             }
         }
         body_last = NUDGE_INVALID_BODY_ID;delta_shape_count=0;
@@ -3460,18 +3738,18 @@ void finalize_removed_bodies(context_t* c) {
             const unsigned body = c->colliders.spheres.transforms[i].body;
             assert(body<c->bodies.count);
             assert(!(c->bodies.filters[body].flags&BF_IS_REMOVED));   // not sure about this
-            BodyInfo* bi = &c->bodies.infos[body];assert(bi->first_sphere_index>=0);
+            BodyLayout* bl = &c->bodies.layouts[body];assert(bl->first_sphere_index>=0);
             if (body_last!=body)    {
                 body_last=body;
-                assert(bi->first_sphere_index==(int)i);
+                assert(bl->first_sphere_index==(int)i);
                 delta_shape_count=0;
             }
             else {
                 ++delta_shape_count;
-                assert(bi->first_sphere_index>=0);
-                assert(i>=(uint16_t)bi->first_sphere_index);
-                assert(i<(uint16_t)bi->first_sphere_index+bi->num_spheres);
-                assert(i==(uint16_t)bi->first_sphere_index+delta_shape_count);
+                assert(bl->first_sphere_index>=0);
+                assert(i>=(uint16_t)bl->first_sphere_index);
+                assert(i<(uint16_t)bl->first_sphere_index+bl->num_spheres);
+                assert(i==(uint16_t)bl->first_sphere_index+delta_shape_count);
             }
         }
     }
@@ -3486,7 +3764,7 @@ void remove_body(context_t* c,unsigned body)    {
     BodyFilter* f = &c->bodies.filters[body];
     f->flags|=BF_IS_DISABLED_OR_REMOVED;
     f->collision_group=f->collision_mask=0;
-    f->idle_counter=0xff;              // set it to sleep
+    c->bodies.idle_counters[body]=0xff;              // set it to sleep
     /*  // Here or in finalize_removed_bodies ?
         if (c->bodies.properties[body].mass_inverse<0) {
         // see if a kinematic animation is associated to this body and delete it (or not ?)
@@ -3522,11 +3800,11 @@ unsigned add_box(context_t* c,float mass, float hsizex, float hsizey, float hsiz
         body=c->global_data.removed_bodies[0];--c->global_data.finalized_removed_bodies_count;--c->global_data.removed_bodies_count;
         memmove(&c->global_data.removed_bodies[0],&c->global_data.removed_bodies[1],c->global_data.removed_bodies_count*sizeof(body_type));
         assert(body<c->bodies.count);
-        const BodyInfo* bi = &c->bodies.infos[body];
-        assert(bi->first_box_index==-1);
-        assert(bi->num_boxes==0);
-        assert(bi->first_sphere_index==-1);
-        assert(bi->num_spheres==0);
+        const BodyLayout* bl = &c->bodies.layouts[body];
+        assert(bl->first_box_index==-1);
+        assert(bl->num_boxes==0);
+        assert(bl->first_sphere_index==-1);
+        assert(bl->num_spheres==0);
     }
     else {
         assert(c->bodies.count<c->MAX_NUM_BODIES && c->colliders.boxes.count<c->MAX_NUM_BOXES);   // Further boxes can't be added
@@ -3537,35 +3815,31 @@ unsigned add_box(context_t* c,float mass, float hsizex, float hsizey, float hsiz
     BodyProperties* prop = &c->bodies.properties[body];
     Transform* xform = &c->bodies.transforms[body], *xform_collider = NULL;
     assert(xform);
-    BodyInfo* info = &c->bodies.infos[body];BodyFilter* filter = &c->bodies.filters[body];
-    if (comOffset && comOffset[0]==0.f && comOffset[1]==0.f && comOffset[0]==2.f) comOffset = NULL;
+    BodyInfo* info = &c->bodies.infos[body];BodyFilter* filter = &c->bodies.filters[body];BodyLayout* layout = &c->bodies.layouts[body];
+    if (comOffset && comOffset[0]==0.f && comOffset[1]==0.f && comOffset[2]==0.f) comOffset = NULL;
     collider = c->colliders.boxes.count++;
     BoxCollider* boxCollider = &c->colliders.boxes.data[collider];
+    filter->flags = mass>0?BF_IS_DYNAMIC:(mass<0?BF_IS_KINEMATIC:BF_IS_STATIC);
 
     *xform = T ? (*T) : identity_transform; // transform
     xform->body = body; // body id
     memset(&c->bodies.momentum[body], 0, sizeof(c->bodies.momentum[body])); // no velocity/angular velocity
-    if (mass>0.f)   {
+    if (filter->flags&BF_IS_DYNAMIC)   {
         prop->mass_inverse = 1.0f / mass;
         calculate_box_inertia_inverse(prop->inertia_inverse,mass,hsizex,hsizey,hsizez,comOffset);
-        filter->idle_counter = 0;  // no idle
+        c->bodies.idle_counters[body] = 0;  // no idle
     }
     else {
-        memset(prop, 0, 4 * sizeof(float));
-        filter->idle_counter = 0xff;   // idle
-        if (mass<0.f)   prop->mass_inverse = 1.0f / mass;
+        prop->mass_inverse = (filter->flags&BF_IS_KINEMATIC) ? (1.0f/mass) : 0.f;
+        memset(prop->inertia_inverse,0,3*sizeof(float));
+        c->bodies.idle_counters[body] = 0xff;   // idle
     }
 
     //memset(info,0,sizeof(BodyInfo));
     info->com_offset[0]=info->com_offset[1]=info->com_offset[2]=0.f;
-    info->num_boxes = 1;info->num_spheres = 0;
-    info->first_box_index = (int16_t) collider;
-    info->first_sphere_index = -1;
-    filter->aux_body = -1;  // reset some info fields
-    filter->flags = mass>0?BF_IS_DYNAMIC:(mass<0?BF_IS_KINEMATIC:BF_IS_STATIC);
-/*#   ifndef NUDGE_BODYINFO_STRUCT_NO_USERID
-        info->userId = -1;
-#   endif*/
+    layout->num_boxes = 1;layout->num_spheres = 0;
+    layout->first_box_index = (int16_t) collider;
+    layout->first_sphere_index = -1;
     boxCollider->size[0] = hsizex;
     boxCollider->size[1] = hsizey;
     boxCollider->size[2] = hsizez;
@@ -3593,11 +3867,11 @@ unsigned add_sphere(context_t* c, float mass, float radius, const Transform* T, 
         body=c->global_data.removed_bodies[0];--c->global_data.finalized_removed_bodies_count;--c->global_data.removed_bodies_count;
         memmove(&c->global_data.removed_bodies[0],&c->global_data.removed_bodies[1],c->global_data.removed_bodies_count*sizeof(body_type));
         assert(body<c->bodies.count);
-        const BodyInfo* bi = &c->bodies.infos[body];
-        assert(bi->first_box_index==-1);
-        assert(bi->num_boxes==0);
-        assert(bi->first_sphere_index==-1);
-        assert(bi->num_spheres==0);
+        const BodyLayout* bl = &c->bodies.layouts[body];
+        assert(bl->first_box_index==-1);
+        assert(bl->num_boxes==0);
+        assert(bl->first_sphere_index==-1);
+        assert(bl->num_spheres==0);
     }
     else {
         assert(c->bodies.count<c->MAX_NUM_BODIES && c->colliders.spheres.count<c->MAX_NUM_SPHERES);   // Further spheres can't be added
@@ -3607,33 +3881,29 @@ unsigned add_sphere(context_t* c, float mass, float radius, const Transform* T, 
 
     BodyProperties* prop = &c->bodies.properties[body];
     Transform *xform = &c->bodies.transforms[body], *xform_collider = NULL;
-    BodyInfo* info = &c->bodies.infos[body];BodyFilter* filter = &c->bodies.filters[body];
-    if (comOffset && comOffset[0]==0.f && comOffset[1]==0.f && comOffset[0]==2.f) comOffset = NULL;
+    BodyInfo* info = &c->bodies.infos[body];BodyFilter* filter = &c->bodies.filters[body];BodyLayout* layout = &c->bodies.layouts[body];
+    if (comOffset && comOffset[0]==0.f && comOffset[1]==0.f && comOffset[2]==0.f) comOffset = NULL;
     collider = c->colliders.spheres.count++;
+    filter->flags = mass>0?BF_IS_DYNAMIC:(mass<0?BF_IS_KINEMATIC:BF_IS_STATIC);
 
     *xform = T ? (*T) : identity_transform; // transform
     xform->body = body; // body id
     memset(&c->bodies.momentum[body], 0, sizeof(c->bodies.momentum[body])); // no velocity/angular velocity
-    if (mass>0.f)   {
+    if (filter->flags&BF_IS_DYNAMIC)   {
         prop->mass_inverse = 1.0f / mass;
         calculate_sphere_inertia_inverse(prop->inertia_inverse,mass,radius,comOffset);
-        filter->idle_counter = 0;   // no idle
+        c->bodies.idle_counters[body] = 0;   // no idle
     }
     else {
-        memset(prop, 0, 4 * sizeof(float));
-        filter->idle_counter = 0xff;   // idle
-        if (mass<0.f)   prop->mass_inverse = 1.0f / mass;
+        prop->mass_inverse = (filter->flags&BF_IS_KINEMATIC) ? (1.0f/mass) : 0.f;
+        memset(prop->inertia_inverse,0,3*sizeof(float));
+        c->bodies.idle_counters[body] = 0xff;   // idle        
     }
     //memset(info,0,sizeof(BodyInfo));
     info->com_offset[0]=info->com_offset[1]=info->com_offset[2]=0.f;
-    info->num_boxes = 0;info->num_spheres = 1;
-    info->first_box_index = -1;
-    info->first_sphere_index =  (int16_t) collider;
-    filter->aux_body = -1;  // reset some info fields
-    filter->flags = mass>0?BF_IS_DYNAMIC:(mass<0?BF_IS_KINEMATIC:BF_IS_STATIC);
-/*#   ifndef NUDGE_BODYINFO_STRUCT_NO_USERID
-        info->userId = -1;
-#   endif*/
+    layout->num_boxes = 0;layout->num_spheres = 1;
+    layout->first_box_index = -1;
+    layout->first_sphere_index =  (int16_t) collider;    
     c->colliders.spheres.data[collider].radius = radius;
     xform_collider = &c->colliders.spheres.transforms[collider];
     *xform_collider = identity_transform;
@@ -3663,11 +3933,11 @@ unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_b
         body=c->global_data.removed_bodies[0];--c->global_data.finalized_removed_bodies_count;--c->global_data.removed_bodies_count;
         memmove(&c->global_data.removed_bodies[0],&c->global_data.removed_bodies[1],c->global_data.removed_bodies_count*sizeof(body_type));
         assert(body<c->bodies.count);
-        const BodyInfo* bi = &c->bodies.infos[body];
-        assert(bi->first_box_index==-1);
-        assert(bi->num_boxes==0);
-        assert(bi->first_sphere_index==-1);
-        assert(bi->num_spheres==0);
+        const BodyLayout* bl = &c->bodies.layouts[body];
+        assert(bl->first_box_index==-1);
+        assert(bl->num_boxes==0);
+        assert(bl->first_sphere_index==-1);
+        assert(bl->num_spheres==0);
     }
     else {
         assert(c->bodies.count<c->MAX_NUM_BODIES);   // Further bodies can't be added (it should never happen, since: c->MAX_NUM_BODIES=c->MAX_NUM_BOXES+c->MAX_NUM_SPHERES)
@@ -3676,27 +3946,24 @@ unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_b
     }
     BodyProperties* prop = &c->bodies.properties[body];
     Transform *xform = &c->bodies.transforms[body];
-    BodyInfo* info = &c->bodies.infos[body];BodyFilter* filter = &c->bodies.filters[body];
-    if (comOffset && comOffset[0]==0.f && comOffset[1]==0.f && comOffset[0]==2.f) comOffset = NULL;
+    BodyInfo* info = &c->bodies.infos[body];BodyFilter* filter = &c->bodies.filters[body];BodyLayout* layout = &c->bodies.layouts[body];
+    if (comOffset && comOffset[0]==0.f && comOffset[1]==0.f && comOffset[2]==0.f) comOffset = NULL;
     //memset(info,0,sizeof(BodyInfo));
     info->com_offset[0]=info->com_offset[1]=info->com_offset[2]=0.f;
-    filter->aux_body = -1;  // reset some info fields
     filter->flags = mass>0?BF_IS_DYNAMIC:(mass<0?BF_IS_KINEMATIC:BF_IS_STATIC);
     if (comOffset) filter->flags|=BF_HAS_COM_OFFSET;
-/*#   ifndef NUDGE_BODYINFO_STRUCT_NO_USERID
-        info->userId = -1;
-#   endif*/
+
     *xform = T ? (*T) : identity_transform; // transform
     xform->body = body; // body id
-    filter->idle_counter = 0;  // no idle
     memset(&c->bodies.momentum[body], 0, sizeof(c->bodies.momentum[body])); // no velocity/angular velocity
-    prop->mass_inverse = mass!=0.f ? (1.0f / mass) : 0.f;
-    if (inertia)    {for (int i=0;i<3;i++)   prop->inertia_inverse[i] = inertia[i]!=0.f ? (1.0f / inertia[i]) : 0.f;}
-    else {
-        memset(prop->inertia_inverse,0,3*sizeof(float));
-        filter->idle_counter = 0xff;   // idle
+    prop->mass_inverse = filter->flags&BF_IS_STATIC ? 0.f : (1.0f / mass);
+    memset(prop->inertia_inverse,0,3*sizeof(float));
+    if (filter->flags&BF_IS_DYNAMIC)    {
+        assert(inertia);
+        if (inertia) {for (int i=0;i<3;i++)   prop->inertia_inverse[i] = inertia[i]!=0.f ? (1.0f / inertia[i]) : 0.f;}
+        c->bodies.idle_counters[body] = 0;  // no idle
     }
-    if (filter->flags&BF_IS_STATIC_OR_KINEMATIC) filter->idle_counter = 0xff;   // idle
+    else c->bodies.idle_counters[body] = 0xff;   // idle
 
     for (unsigned i=0;i<num_boxes;i++)   {
         unsigned collider = c->colliders.boxes.count++;
@@ -3706,9 +3973,9 @@ unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_b
         *xf = boxOffsetTransforms ? boxOffsetTransforms[i] : identity_transform;
         if (comOffset) {for (int l=0;l<3;l++) {xf->position[l]-=comOffset[l];info->com_offset[l]=comOffset[l];}}
         xf->body = body;
-        if (i==0) info->first_box_index = collider;
+        if (i==0) layout->first_box_index = collider;
     }
-    info->num_boxes = num_boxes;
+    layout->num_boxes = num_boxes;
 
     for (unsigned i=0;i<num_spheres;i++)   {
         unsigned collider = c->colliders.spheres.count++;
@@ -3718,9 +3985,9 @@ unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_b
         *xf = sphereOffsetTransforms ? sphereOffsetTransforms[i] : identity_transform;
         if (comOffset) {for (int l=0;l<3;l++) {xf->position[l]-=comOffset[l];info->com_offset[l]=comOffset[l];}}
         xf->body = body;
-        if (i==0) info->first_sphere_index = collider;
+        if (i==0) layout->first_sphere_index = collider;
     }
-    info->num_spheres = num_spheres;
+    layout->num_spheres = num_spheres;
 
     filter->collision_group = COLLISION_GROUP_DEFAULT;filter->collision_mask = COLLISION_GROUP_ALL;
 
@@ -3882,11 +4149,14 @@ float* calculate_graphic_transform_for_body(context_t* c,unsigned body,float* pM
     const Transform* T = &c->bodies.transforms[body];assert(T->body==body);
     //const float mass_inverse = c->bodies.properties[T->body].mass_inverse<0.f;
     const uint32_t flags = c->bodies.filters[T->body].flags;
-    const int isSleeping = c->bodies.filters[T->body].idle_counter==0xff;
+    const FlagMask exclude_flags = c->global_data.exclude_smoothing_graphic_transform_flags;
+    const int isSleeping = c->bodies.idle_counters[T->body]==0xff;
     const float timeStepMinusRemainingTime=c->simulation_params.time_step_minus_remaining_time;
     Transform Tn;memcpy(&Tn,T,sizeof(Transform));
 
-    const int mustSmoothTransform = timeStepMinusRemainingTime>0 && !isSleeping && !(flags&BF_IS_STATIC) && ((flags&BF_IS_KINEMATIC)?(c->global_data.flags&GF_SMOOTH_GRAPHIC_TRANSFORMS_FOR_KINEMATIC_BODIES):(c->global_data.flags&GF_SMOOTH_GRAPHIC_TRANSFORMS_FOR_DYNAMIC_BODIES));
+    int mustSmoothTransform = timeStepMinusRemainingTime>0 && !(exclude_flags&flags);
+    if (mustSmoothTransform && (flags&BF_IS_STATIC || (flags&BF_IS_DYNAMIC && isSleeping))) mustSmoothTransform=0;
+
     if (mustSmoothTransform)   {
         // same work done in advance(...) here AFAIK
         assert(T==&c->bodies.transforms[T->body]);
@@ -3955,8 +4225,8 @@ void contact_data_find_colliders(const context_t* c,
     const uint64_t b_tag =  (tag&0xFFFF000000000000ULL)>>(3ULL*16ULL);
     struct coll_t {unsigned body;uint64_t tag;int16_t first_box_index;int16_t* box_colliding_index;uint16_t num_boxes;int16_t first_sphere_index;int16_t* sphere_colliding_index;uint16_t num_spheres;};
     struct coll_t coll[2]=
-        {{a,a_tag,c->bodies.infos[a].first_box_index,box_collider_index_for_body_a,c->bodies.infos[a].num_boxes,c->bodies.infos[a].first_sphere_index,sphere_collider_index_for_body_a,c->bodies.infos[a].num_spheres},
-        {b,b_tag,c->bodies.infos[b].first_box_index,box_collider_index_for_body_b,c->bodies.infos[b].num_boxes,c->bodies.infos[b].first_sphere_index,sphere_collider_index_for_body_b,c->bodies.infos[b].num_spheres}};
+        {{a,a_tag,c->bodies.layouts[a].first_box_index,box_collider_index_for_body_a,c->bodies.layouts[a].num_boxes,c->bodies.layouts[a].first_sphere_index,sphere_collider_index_for_body_a,c->bodies.layouts[a].num_spheres},
+        {b,b_tag,c->bodies.layouts[b].first_box_index,box_collider_index_for_body_b,c->bodies.layouts[b].num_boxes,c->bodies.layouts[b].first_sphere_index,sphere_collider_index_for_body_b,c->bodies.layouts[b].num_spheres}};
     for (int t=0;t<2;t++) {
         struct coll_t* cl = &coll[t];
         assert(cl->num_boxes || cl->num_spheres);
@@ -3996,27 +4266,32 @@ void contact_data_find_colliders(const context_t* c,
 
 unsigned pre_simulation_step(context_t* c,double elapsedSecondsFromLastCall)    {
     struct SimulationParams* sp = &c->simulation_params;
+    unsigned sim_is_burning_time = 0;
     sp->num_substeps_in_last_frame=0;
-    elapsedSecondsFromLastCall+=sp->remaining_time_in_seconds;sp->remaining_time_in_seconds=0;
     if (elapsedSecondsFromLastCall<0) elapsedSecondsFromLastCall=0;
-    while (elapsedSecondsFromLastCall>=sp->time_step)	{
+    sp->remaining_time_in_seconds+=elapsedSecondsFromLastCall;
+    while (sp->remaining_time_in_seconds>=sp->time_step)	{
         if (sp->num_substeps_in_last_frame>=sp->max_num_substeps) {
             sp->remaining_time_in_seconds = 0;
-#           ifndef NDEBUG
-            log("[PhysicFrame: %llu] max_num_substeps=%d reached:\tBurnt remaining_time=%1.3f (on time_step=%1.3f)\n",sp->num_frames,sp->max_num_substeps,elapsedSecondsFromLastCall,sp->time_step);
-#           endif
+//#           ifndef NDEBUG
+            if (sp->numsubsteps_overflow_warning_mode!=2) {
+                const int must_warn = sp->numsubsteps_overflow_warning_mode!=0 || sp->numsubsteps_overflow_in_last_frame>0;
+                if (must_warn) log("[PhysicFrame: %llu] max_num_substeps=%d reached:\tBurnt remaining_time=%1.3f (on time_step=%1.3f)\n",sp->num_frames,sp->max_num_substeps,elapsedSecondsFromLastCall,sp->time_step);
+            }
+//#           endif
             // setting a bigger 'sp->max_num_substeps' can help if you see this message every frame, but it you only see
-            // it every now and then it's absolutely normal.
+            // it every now and then it's absolutely normal.            
+            sim_is_burning_time = 1;
             break;
         }
-        elapsedSecondsFromLastCall-=sp->time_step;
-        sp->remaining_time_in_seconds = elapsedSecondsFromLastCall;
+        sp->remaining_time_in_seconds-=sp->time_step;
         ++sp->num_substeps_in_last_frame;
     }
     //assert(sp->remaining_time_in_seconds<sp->time_step);
-    if (sp->remaining_time_in_seconds>sp->time_step) sp->remaining_time_in_seconds=0;   // It might happen when we pause the game
+    //if (sp->remaining_time_in_seconds>sp->time_step) sp->remaining_time_in_seconds=0;   // It might happen when we pause the game
     sp->time_step_minus_remaining_time=(float)(sp->time_step-sp->remaining_time_in_seconds);
 
+    sp->numsubsteps_overflow_in_last_frame = sim_is_burning_time;
     // Good to debug 'sp->num_substeps_in_last_frame':
     //log("[PhysicFrame: %llu] num_substeps_in_last_frame=%d time_step=%f remaining_time=%f\n",sp->num_frames,sp->num_substeps_in_last_frame,sp->time_step,sp->remaining_time_in_seconds);
     return sp->num_substeps_in_last_frame;
@@ -4066,20 +4341,25 @@ void simulate(context_t* c,float timeStep, unsigned numSubSteps, unsigned numIte
         const float* pGravity[2] = {c->global_data.gravity,NULL};
         const int gravityIdx = (c->global_data.flags&GF_USE_GLOBAL_GRAVITY) ? 0 : 1;
         for (unsigned i = 0; i < c->active_bodies.count; ++i) {
-            unsigned index = c->active_bodies.indices[i];
-            BodyMomentum* momentum = &c->bodies.momentum[index];
-            pGravity[1] = c->bodies.properties[index].gravity;
-            const float* gravity = pGravity[gravityIdx];
-            BodyFilter* filter = &c->bodies.filters[index];
-            if (filter->flags&BF_IS_DYNAMIC)    {
+            const unsigned index = c->active_bodies.indices[i];
+            //const BodyFilter* filter = &c->bodies.filters[index];
+            const FlagMask flags = c->bodies.filters[index].flags;
+            if (flags&BF_IS_DYNAMIC)    {
                 // Apply gravity and damping
+                BodyMomentum* momentum = &c->bodies.momentum[index];
+                pGravity[1] = c->bodies.properties[index].gravity;
+                const float* gravity = pGravity[(flags&BF_HAS_DIFFERENT_GRAVITY_MODE)?(!gravityIdx):gravityIdx];
                 for (int l=0;l<3;l++)   {
                     momentum->velocity[l] += gravity[l] * timeStep;
                     momentum->velocity[l] *= damping_linear;
                     momentum->angular_velocity[l] *= damping_angular;
                 }
-                if (filter->flags&BF_NEVER_SLEEPING) filter->idle_counter=0;   // prevents sleeping
-                filter->aux_body=-1;    // reset aux_body
+                if (flags&BF_NEVER_SLEEPING) c->bodies.idle_counters[index]=0;   // prevents sleeping
+
+#               if NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS>0
+                BodyInfo* info = &c->bodies.infos[index];
+                for (int ab=0;ab<NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS;ab++) info->aux_bodies[ab] = -1;
+#               endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS
             }
         }
 
@@ -4103,6 +4383,8 @@ void simulate(context_t* c,float timeStep, unsigned numSubSteps, unsigned numIte
 
         // Move active bodies.
         advance(c, timeStep);
+
+        ++c->simulation_params.num_total_substeps;
     }
 
 }
@@ -4110,8 +4392,8 @@ void simulate(context_t* c,float timeStep, unsigned numSubSteps, unsigned numIte
 void simulation_step(context_t* c)  {
     struct SimulationParams* sp = &c->simulation_params;
     if (sp->num_substeps_in_last_frame>0)   {
-        assert(sp->time_step>0 && sp->num_iterations_per_time_step>0);
-        simulate(c,(float)sp->time_step,sp->num_substeps_in_last_frame,sp->num_iterations_per_time_step);
+        assert(sp->time_step>0 && sp->num_iterations_per_substep>0);
+        simulate(c,(float)sp->time_step,sp->num_substeps_in_last_frame,sp->num_iterations_per_substep);
         ++sp->num_frames;
     }
 }
@@ -4131,6 +4413,8 @@ void save_context(FILE* f,const context_t* c)   {
     rv=fwrite(bd->properties,sizeof(BodyProperties),bd->count,f);assert(rv==bd->count);
     rv=fwrite(bd->momentum,sizeof(BodyMomentum),bd->count,f);assert(rv==bd->count);
     rv=fwrite(bd->filters,sizeof(BodyFilter),bd->count,f);assert(rv==bd->count);
+    rv=fwrite(bd->layouts,sizeof(BodyLayout),bd->count,f);assert(rv==bd->count);
+    rv=fwrite(bd->idle_counters,sizeof(uint8_t),bd->count,f);assert(rv==bd->count);
     rv=fwrite(bd->infos,sizeof(BodyInfo),bd->count,f);assert(rv==bd->count);
     // c->colliders
     const ColliderData* cd = &c->colliders;
@@ -4169,7 +4453,12 @@ void save_context(FILE* f,const context_t* c)   {
     // c->global_data
     fprintf(f,"\nsizeof(GlobalData)\n%u\n",(uint32_t)sizeof(GlobalData));
     rv=fwrite(&c->global_data,sizeof(GlobalData),1,f);assert(rv==1);
-    rv=fwrite(c->global_data.removed_bodies,sizeof(c->global_data.removed_bodies[0]),c->global_data.removed_bodies_count,f);assert(rv==c->global_data.removed_bodies_count);
+    rv=fwrite(c->global_data.removed_bodies,sizeof(c->global_data.removed_bodies[0]),c->global_data.removed_bodies_count,f);assert(rv==c->global_data.removed_bodies_count);    
+    // c->userUint64
+#   ifndef NUDGE_CONTEXT_STRUCT_NO_USER_UNION
+    fprintf(f,"\nsizeof(uint64_t)\n%u\n",(uint32_t)sizeof(uint64_t));
+    rv=fwrite(&c->userUint64,sizeof(uint64_t),1,f);assert(rv==1);
+#   endif // NUDGE_CONTEXT_STRUCT_NO_USER_UNION
 }
 void load_context(FILE* f,context_t* c) {
     size_t rv = 0;uint32_t tmp[6]={};
@@ -4196,6 +4485,8 @@ void load_context(FILE* f,context_t* c) {
     rv=fread(bd->properties,sizeof(BodyProperties),bd->count,f);assert(rv==bd->count);
     rv=fread(bd->momentum,sizeof(BodyMomentum),bd->count,f);assert(rv==bd->count);
     rv=fread(bd->filters,sizeof(BodyFilter),bd->count,f);assert(rv==bd->count);
+    rv=fread(bd->layouts,sizeof(BodyLayout),bd->count,f);assert(rv==bd->count);
+    rv=fread(bd->idle_counters,sizeof(uint8_t),bd->count,f);assert(rv==bd->count);
     rv=fread(bd->infos,sizeof(BodyInfo),bd->count,f);assert(rv==bd->count);
     // c->colliders
     ColliderData* cd = &c->colliders;
@@ -4234,11 +4525,18 @@ void load_context(FILE* f,context_t* c) {
     if (kd->animations_count>kd->animations_capacity) kinematic_data_reserve_animations(kd,kd->animations_count); // TODO: we should reset unuset space between count and capacity
     rv=fread(kd->animations,sizeof(KinematicData::Animation),kd->animations_count,f);assert(rv==kd->animations_count);
     // c->global_data
-    uint32_t global_data_size=0;
+    uint32_t* host_ptr = c->global_data.removed_bodies; // we can't overwrite this!
+    uint32_t global_data_size=0;    
     rv=fscanf(f,"\nsizeof(GlobalData)\n%u\n",&global_data_size);assert(global_data_size==(uint32_t)sizeof(GlobalData));assert(rv==1);
     rv=fread(&c->global_data,sizeof(GlobalData),1,f);assert(rv==1);
-    rv=fread(c->global_data.removed_bodies,sizeof(c->global_data.removed_bodies[0]),c->global_data.removed_bodies_count,f);assert(rv==c->global_data.removed_bodies_count);
-
+    c->global_data.removed_bodies = host_ptr;
+    rv=fread(c->global_data.removed_bodies,sizeof(c->global_data.removed_bodies[0]),c->global_data.removed_bodies_count,f);assert(rv==c->global_data.removed_bodies_count);    
+    // c->userUint64
+#   ifndef NUDGE_CONTEXT_STRUCT_NO_USER_UNION
+    uint32_t uint64_size=0;
+    rv=fscanf(f,"\nsizeof(uint64_t)\n%u\n",&uint64_size);assert(uint64_size==(uint32_t)sizeof(uint64_t));assert(rv==1);
+    rv=fread(&c->userUint64,sizeof(uint64_t),1,f);assert(rv==1);
+#   endif // NUDGE_CONTEXT_STRUCT_NO_USER_UNION
 
     // But now we must reassign the remaining tags
     {
@@ -6846,7 +7144,7 @@ void collide(context_t* c,BodyConnections body_connections)  {
         memset(active, 0, sizeof(active[0])*set_count);
 
         for (unsigned i = 0 /* was 1 */; i < bodies.count; ++i) {
-            if (bodies.filters[i].idle_counter != 0xff
+            if (bodies.idle_counters[i] != 0xff
                     //&& !(c->bodies.filters[i].flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED)    // new
                     && !(c->bodies.filters[i].flags&BF_IS_DISABLED_OR_REMOVED)
                     )
@@ -7168,7 +7466,7 @@ void collide(context_t* c,BodyConnections body_connections)  {
         memset(active, 0, sizeof(active[0])*set_count);
 
         for (unsigned i = 0 /* was 1 */; i < bodies.count; ++i) {
-            if (bodies.filters[i].idle_counter != 0xff
+            if (bodies.idle_counters[i] != 0xff
                     //&& !(bodies.filters[i].flags&BF_IS_STATIC_OR_KINEMATIC_OR_DISABLED_OR_REMOVED)    // new
                     && !(bodies.filters[i].flags&BF_IS_DISABLED_OR_REMOVED)    // new
                     )
@@ -8179,26 +8477,27 @@ void advance(context_t* c,float time_step) {
                )    {
             float3 velocity = make_float3(bodies->momentum[i].velocity);
             float3 angular_velocity = make_float3(bodies->momentum[i].angular_velocity);
-
+            uint8_t* idle_counter = &c->bodies.idle_counters[i];
             if (length2(velocity) < sleeping_threshold_linear_velocity_squared && length2(angular_velocity) < sleeping_threshold_angular_velocity_squared) {
-                if (filter->idle_counter < 0xff) {
-                   ++filter->idle_counter;
-                   //filter->idle_counter=0xff; // nope
-                    /* // New stuff I'm testing (no way!)
-                    if (filter->idle_counter==0xff)  {
+                if (*idle_counter < 0xff) {
+                   ++(*idle_counter);
+                   //*idle_counter=0xff; // nope
+                    /*// New stuff I'm testing (no way!)
+                    if (*idle_counter==0xff)  {
                         memset(&bodies->momentum[i].velocity,0,sizeof(float3));
                         memset(&bodies->momentum[i].angular_velocity,0,sizeof(float3));
                         velocity.x=velocity.y=velocity.z=0.f;
                         angular_velocity.x=angular_velocity.y=angular_velocity.z=0.f;
                     }*/
-                    //if (filter->idle_counter==0xff) continue;   // attempt to try?
+                    //if (*idle_counter==0xff) continue;   // attempt to try? NOPE: does nothing
                 }
+                //else continue; // attempt to try? NOPE: with this alone bodies keep waking up
             }
             else {
-                filter->idle_counter = 0;
+                *idle_counter = 0;
             }
 
-            Rotation dr = { angular_velocity, 0.f };// last value was missing (zero! Was it OK?) assert(dr.s==0.f); // nudge.cpp:4904: warning: missing initializer for member ‘{anonymous}::Rotation::s’ [-Wmissing-field-initializers]
+            Rotation dr = { angular_velocity, 0.f }; // last value was missing (warning: missing initializer for member ‘{anonymous}::Rotation::s’ [-Wmissing-field-initializers])
 
             dr = dr * make_rotation(bodies->transforms[i].rotation);
             dr.v *= half_time_step;

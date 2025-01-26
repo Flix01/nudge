@@ -5,6 +5,10 @@ VisualStudioVersion = 15.0.26430.6
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "example", "example.vcxproj", "{929FB54A-6A75-4FA6-B0F0-E1E3390C7E55}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "example01", "example01.vcxproj", "{929FB54A-6A75-4FA6-B0F0-E1E3390C7E55}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "example02", "example02.vcxproj", "{A1B2C3D4-E5F6-7A8B-9C0D-E1F2G3H4I5J6}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64

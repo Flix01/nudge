@@ -23,6 +23,9 @@
 // Modified by Flix01 in 2024 to use the new version of nudge
 // The code just shows the new API (no new feature has been used)
 
+// Can be compiled with the provided build files, but also with:
+// c++ -march=native -fno-rtti -fno-exceptions -O3 -Wall -fno-rtti -fno-exceptions -I../ ./stdafx.cpp ./main.cpp -o example -lglut -lGL
+
 #include "stdafx.h"
 #include <assert.h>
 /*#include <nudge.h>
@@ -46,7 +49,7 @@
 
 static const nudge::Transform identity_transform = { {}, 0, { 0.0f, 0.0f, 0.0f, 1.0f } };
 
-static nudge::context_t nudge_context = {0};
+static nudge::context_t nudge_context = {};
 static nudge::context_t* c = &nudge_context;	// shorter... we'll use this
 
 
@@ -65,7 +68,7 @@ static void render() {
 	glEnable(GL_LIGHT0);
 	glEnable(GL_COLOR_MATERIAL);
 	
-	glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+	glClearColor(0.6f, 0.8f, 1.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	
 	// Setup projection.
@@ -117,7 +120,7 @@ static void render() {
 	float mMatrix[16];unsigned num_sleeping_and_dynamic=0;
 	for (unsigned body=0,body_count=c->bodies.count;body<body_count;body++)	{
 		const nudge::BodyFilter* filter = &c->bodies.filters[body];	// BodyFilter hosts per-body flags, collision masks and sleeping state
-		const int is_sleeping_and_dynamic = filter->idle_counter==0xFF && filter->flags&nudge::BF_IS_DYNAMIC;num_sleeping_and_dynamic+=is_sleeping_and_dynamic;
+        const int is_sleeping_and_dynamic = c->bodies.idle_counters[body]==0xFF && filter->flags&nudge::BF_IS_DYNAMIC;num_sleeping_and_dynamic+=is_sleeping_and_dynamic;
 		const int has_com_offset = filter->flags&nudge::BF_HAS_COM_OFFSET;
 	
 		const float* color =  !is_sleeping_and_dynamic?(has_com_offset?&com_offset_body_color[0]:&colors[body%num_colors][0]):&sleeping_color[0];
@@ -125,7 +128,7 @@ static void render() {
 
 		const int use_graphic_transform = globals.use_graphic_transform;	
 
-		const nudge::BodyInfo* info = &c->bodies.infos[body];	// BodyInfo hosts the indices of the body colliders (i.e. collision shapes). The global arrays of colliders are in c->colliders.boxes and c->colliders.spheres
+        const nudge::BodyLayout* layout = &c->bodies.layouts[body];	// BodyLayout hosts the indices of the body colliders (i.e. collision shapes). The global arrays of colliders are in c->colliders.boxes and c->colliders.spheres
 		//glPushMatrix();
 		if (use_graphic_transform)	{
 			// Use use_graphic_transform=1 in release mode, where you have a single graphic mesh 
@@ -136,18 +139,18 @@ static void render() {
 			nudge::calculate_graphic_transform_for_body(c,body,mMatrix);	// what this does is: 1) smoothes the graphic transform (using DeltaTimes less than timeStep)
 																			// 2) inglobes the com_offset (if present), so that we should not manually translate our graphic mesh
 			glLoadMatrixf(mMatrix);
-			if (info->num_boxes>0) {
-				if (info->num_boxes==1) {			
-					assert(info->first_box_index>=0 && info->num_boxes==1 && info->num_spheres==0 && info->first_sphere_index==-1);
-					assert((uint16_t)info->first_box_index<c->colliders.boxes.count);
-					const nudge::BoxCollider* coll = &c->colliders.boxes.data[info->first_box_index];
+            if (layout->num_boxes>0) {
+                if (layout->num_boxes==1) {
+                    assert(layout->first_box_index>=0 && layout->num_boxes==1 && layout->num_spheres==0 && layout->first_sphere_index==-1);
+                    assert((uint16_t)layout->first_box_index<c->colliders.boxes.count);
+                    const nudge::BoxCollider* coll = &c->colliders.boxes.data[layout->first_box_index];
 					glScalef(coll->size[0],coll->size[1],coll->size[2]);
 					glutSolidCube(2.0f);
 				}
-				else if (info->num_boxes==globals.num_boxes_per_torus)	{
+                else if (layout->num_boxes==globals.num_boxes_per_torus)	{
 					// it's a torus				
-					assert(info->first_box_index>=0 && info->num_spheres==0 && info->first_sphere_index==-1);					
-					assert((uint16_t)info->first_box_index+info->num_boxes<=c->colliders.boxes.count);
+                    assert(layout->first_box_index>=0 && layout->num_spheres==0 && layout->first_sphere_index==-1);
+                    assert((uint16_t)layout->first_box_index+layout->num_boxes<=c->colliders.boxes.count);
 					//const nudge::BoxCollider* coll = &c->colliders.boxes.data[info->first_box_index];	// first box shape (of globals.num_boxes_per_torus)
 					//const nudge::Transform* T = &c->colliders.boxes.transforms[info->first_box_index];	// first relative transform (of globals.num_boxes_per_torus)
 					// the idea was be to use 'coll->size[]' and/or 'T' to extract a scaling that works...
@@ -159,10 +162,10 @@ static void render() {
                     			   16); // GLint rings)
 				}					
 			}
-			else if (info->num_spheres>0) {
-				assert(info->first_sphere_index>=0 && info->num_spheres==1 && info->num_boxes==0 && info->first_box_index==-1);
-				assert((uint16_t)info->first_sphere_index<c->colliders.spheres.count);
-				const nudge::SphereCollider* coll = &c->colliders.spheres.data[info->first_sphere_index];
+            else if (layout->num_spheres>0) {
+                assert(layout->first_sphere_index>=0 && layout->num_spheres==1 && layout->num_boxes==0 && layout->first_box_index==-1);
+                assert((uint16_t)layout->first_sphere_index<c->colliders.spheres.count);
+                const nudge::SphereCollider* coll = &c->colliders.spheres.data[layout->first_sphere_index];
 				glutSolidSphere(coll->radius, 16, 8); 
 			}
 		}
@@ -171,10 +174,10 @@ static void render() {
 			// or you want to see all the boxes/spheres that make up the body.
 			// The transforms here are not smoothed.						
 			const nudge::Transform* T1 = &c->bodies.transforms[body];
-			if (info->num_boxes>0) {
-				assert(info->first_box_index>=0);
-				assert((uint16_t)info->first_box_index+info->num_boxes<=c->colliders.boxes.count);
-				for (uint16_t i=info->first_box_index,isz=info->first_box_index+info->num_boxes;i<isz;i++)	{
+            if (layout->num_boxes>0) {
+                assert(layout->first_box_index>=0);
+                assert((uint16_t)layout->first_box_index+layout->num_boxes<=c->colliders.boxes.count);
+                for (uint16_t i=layout->first_box_index,isz=layout->first_box_index+layout->num_boxes;i<isz;i++)	{
 					const nudge::Transform* T2 = &c->colliders.boxes.transforms[i];
 					const nudge::Transform T = nudge::TransformMul(*T1,*T2);
 					const nudge::BoxCollider* coll = &c->colliders.boxes.data[i];			
@@ -184,10 +187,10 @@ static void render() {
 					glutSolidCube(2.0f);
 				}				
 			}
-			if (info->num_spheres>0) {
-				assert(info->first_sphere_index>=0);
-				assert((uint16_t)info->first_sphere_index+info->num_spheres<=c->colliders.spheres.count);
-				for (uint16_t i=info->first_sphere_index,isz=info->first_sphere_index+info->num_spheres;i<isz;i++)	{
+            if (layout->num_spheres>0) {
+                assert(layout->first_sphere_index>=0);
+                assert((uint16_t)layout->first_sphere_index+layout->num_spheres<=c->colliders.spheres.count);
+                for (uint16_t i=layout->first_sphere_index,isz=layout->first_sphere_index+layout->num_spheres;i<isz;i++)	{
 					const nudge::Transform* T2 = &c->colliders.spheres.transforms[i];
 					const nudge::Transform T = nudge::TransformMul(*T1,*T2);
 					const nudge::SphereCollider* coll = &c->colliders.spheres.data[i];			
