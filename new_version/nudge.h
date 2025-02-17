@@ -186,6 +186,18 @@ namespace nudge {
     };
 
     /**
+     * @brief Storage struct for user data (by default used inside \ref context_t "context_t"): a per-context 64-bit user space in 11 different variable names that share the same space, so that ONLY one of them must be chosen and used
+     */
+    union UserData64Bit{
+        void* ptr;int64_t i64;uint64_t u64;double f64;int32_t i32[2];uint32_t u32[2];float f32[2];
+        int16_t i16[4];uint16_t u16[4];int8_t i8[8];uint8_t u8[8];
+    };
+    /**
+     * @brief Storage struct for user data (by default used inside \ref BodyInfo "BodyInfo"): a per-body 32-bit user space in 7 different variable names that share the same space, so that ONLY one of them must be chosen and used
+     */
+    union UserData32Bit{int32_t i32;uint32_t u32;float f32;int16_t i16[2];uint16_t u16[2];int8_t i8[4];uint8_t u8[4];};
+
+    /**
      * @brief The Transform struct
      * @note This struct has been rearranged to use anomymous unions for improved flexibility, but now initializations must be done with and additional pair of curly parenthesis, otherwise some compiler can issue a warning; for example: Transform T = { {{0,0,0}} , {0} , {{0,0,0,1}} };
      * @note The 'vector' and 'quaternion' fields have been added only to allow partial assignments like: T2.quaternion = T1.quaternion;
@@ -234,6 +246,7 @@ namespace nudge {
         float angular_velocity[3];  /**< the body angular velocity in world space */
         float unused1;      /**< padding value (this is not used AFAIK) */
 	};
+
     /**
      * @brief The SphereCollider struct
      */
@@ -291,7 +304,7 @@ namespace nudge {
 		struct {
             uint16_t* tags; /**< array of the collider unique identifiers of size count (do not touch) */
             SphereCollider* data; /**< array of SphereCollider structs of size count */
-            Transform* transforms;    /**< array of Transform structs of size count, also used to get the body this collider belongs to */
+            Transform* transforms;    /**< array of Transform structs of size count, also used to get the body this collider belongs to */ // probably a simple position is enough here... possible optimization?
             uint32_t count; /**< the number of sphere colliders */
         } spheres;    /**< Anonymous struct instance used to access all the shpere colliders */
 	};
@@ -334,7 +347,7 @@ namespace nudge {
 #   endif // NUDGE_USE_INT32_ENUMS
     /**
      * @brief The BodyFlagEnum enum
-     * @note User can easily add custom flags this way: namespace nudge {const FlagMask BF_IS_MY_TYPE = 1<<12,...;}
+     * @note User can easily add custom flags this way: namespace nudge {const FlagMask BF_IS_MY_TYPE_1 = 1<<13, BF_IS_MY_TYPE_2 = 1<<14, BF_IS_MY_TYPE_3 = 1<<15;}
      * @note Flag marked [unused, not implemented] will never be implemented inside nudge.h
      * @note Depending on the NUDGE_USE_INT32_ENUMS definition \ref FlagMask can contain 32 or 16 flags
      */
@@ -353,9 +366,11 @@ namespace nudge {
         BF_NEVER_SLEEPING = 1<<6, /**< [experimental] */
         BF_HAS_DIFFERENT_GRAVITY_MODE = 1<<7, /**< [experimental] inverts the \ref GlobalDataMaskEnum "GF_USE_GLOBAL_GRAVITY" mode in \ref GlobalData "c->global_data.flags" on a per-body base */
 #       ifndef NUDGE_BODYFLAG_ENUM_NO_UNUSED_FLAGS
-        BF_IS_CHARACTER = 1<<8, /**< [unused, not implemented] flag added for user convenience */
-        BF_IS_PLATFORM = 1<<9,  /**< [unused, not implemented] flag added for user convenience */
-        BF_IS_SENSOR = 1<<10,    /**< [unused, not implemented] flag added for user convenience */
+        BF_IS_CHARACTER = 1<<8, /**< [unused, not implemented, removable] flag added for user convenience */
+        BF_IS_PLATFORM = 1<<9,  /**< [unused, not implemented, removable] flag added for user convenience */
+        BF_IS_SENSOR = 1<<10,    /**< [unused, not implemented, removable] flag added for user convenience */
+        BF_IS_FRUSTUM_CULLED = 1<<11,    /**< [unused, not implemented, removable] flag added for user convenience */
+        BF_IS_CONVEYOR_BELT = 1<<12,    /**< [unused, not implemented, removable] flag added for user convenience */
 #       endif
         BF_IS_STATIC_OR_KINEMATIC = BF_IS_STATIC|BF_IS_KINEMATIC,   /**< read-only [internal flag] */
         BF_IS_STATIC_OR_DYNAMIC = BF_IS_STATIC|BF_IS_DYNAMIC,   /**< read-only [internal flag] */
@@ -381,43 +396,34 @@ namespace nudge {
     */
     struct BodyLayout {
         uint16_t num_boxes; /**< the number of box colliders this body owns */
-        int16_t first_box_index; /**< the index of the first box (or sphere) collider in \ref ColliderData "ColliderData::boxes" (box colliders are assumed to be contiguous, with no fragmentation), or -1 */
+        int16_t first_box_index; /**< the index of the first box collider in \ref ColliderData "ColliderData::boxes" (box colliders are assumed to be contiguous, with no fragmentation), or -1 */
 
-        uint16_t num_spheres; /**< the number of shperes colliders this body owns */
+        uint16_t num_spheres; /**< the number of sphere colliders this body owns */
         int16_t first_sphere_index; /**< the index of the first sphere collider in \ref ColliderData "ColliderData::spheres" (sphere colliders are assumed to be contiguous, with no fragmentation), or -1 */
     };
 
     /**
-     * @brief The BodyInfo struct contains the read-only graphic center of mass offset of the body (mostly useless), and plenty of per-body user available space, handy to bind user-side structs to a nudge physic body
+     * @brief The BodyInfo struct contains some read-only graphic properties of the body (e.g. axis aligned bounding box and center of mass offset), and plenty of per-body user available space, handy to bind user-side structs to a nudge physic body
      * @note User custom field injection is allowed by the two definitions NUDGE_BODYINFO_STRUCT_EXTRA_FIELDS and NUDGE_BODYINFO_STRUCT_EXTRA_PADDING; the best place to do so is in a nudge config header file (setting its name in the project-scope definition: NUDGE_USER_CFG_FILE_NAME)
-     * @note It's possible to remove all the default (per-body) user-fields of this struct using the definition NUDGE_BODYINFO_STRUCT_NO_USER_UNION; all except the 'aux_bodies[...]' field, that can be deleted by setting the NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS definition to zero
+     * @note It's possible to remove the default (per-body) UserData32Bit user field of this struct using the definition NUDGE_BODYINFO_STRUCT_NO_USER_DATA, and the 'aux_bodies[...]' array by setting the NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES definition to zero
      */
     struct BodyInfo {
+#       ifndef NUDGE_BODYINFO_STRUCT_NO_USER_DATA
+        UserData32Bit user; /**< user data: a per-body user space in 7 different variable names that share the same space, so that ONLY one of them must be chosen and used */
+#       endif // NUDGE_BODYINFO_STRUCT_NO_USER_DATA
 #       ifdef NUDGE_BODYINFO_STRUCT_EXTRA_FIELDS
         NUDGE_BODYINFO_STRUCT_EXTRA_FIELDS /**< user stuff injected at the beginning of the BodyInfo struct */
 #       endif // NUDGE_BODYINFO_STRUCT_EXTRA_FIELDS
-        float com_offset[3]; /**< [read-only] reference of the center of mass offset (this is currently the only non-user field in the BodyInfo struct) */
-#       ifndef NUDGE_BODYINFO_STRUCT_NO_USER_UNION
-        union {
-            void* userPtr;      /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            int64_t userInt64;    /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            uint64_t userUint64;    /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            double userDouble;      /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            int32_t userInt32[2];    /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            uint32_t userUint32[2];    /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            float userFloat[2];     /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            int16_t userInt16[4];   /**< user data: a per-body user space in 9 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            uint16_t userUint16[4];   /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            int8_t userInt8[8];   /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            uint8_t userUint8[8];  /**< user data: a per-body user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-        };
-#       endif // NUDGE_BODYINFO_STRUCT_NO_USER_UNION
-#       ifndef NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS
-#           define NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS (2)
-#       endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS
-#       if NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS>0
-        int16_t aux_bodies[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS]; /**< user data that are reset to -1 every frame (but only for bodies in the \ref ActiveBodies "c->active_bodies" list); they can be used to store body indices, since they are currently in the [0,8192) range */
-#       endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS
+        float aabb_center[3];  /**< [read-only; unused by nudge.h] the axis aligned bounding box center of the body; note that the com_offset has not been stripped from it (it must be summed to strip it from aabb_center) */
+        float aabb_half_extents[3];  /**< [read-only; unused by nudge.h] the axis aligned bounding box half extents of the body (it does not depend on com_offset) */
+        float com_offset[3]; /**< [read-only] the center of mass offset of the body (it's only used in the \ref calculate_graphic_transform_for_body "calculate_graphic_transform_xxx(...)" functions)  */
+        float aabb_enlarged_radius;  /**< [read-only] this radius is the sum of |com_offset|+|aabb_half_extents|, so that it can be used only with the body's transform position (no transform orientation required) */
+#       ifndef NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES
+#           define NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES (2)  // sizeof(BodyInfo): (2) => 48 bytes; (4) => 52 bytes; (6) => 56 bytes; (8) => 60 bytes; (10) => 64 bytes
+#       endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES
+#       if NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES>0
+        int16_t aux_bodies[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES]; /**< user data that are reset to -1 every frame (but only for bodies in the \ref ActiveBodies "c->active_bodies" list); they can be used to store body indices, since they are currently in the [0,8192) range */
+#       endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES
 #       ifdef NUDGE_BODYINFO_STRUCT_EXTRA_PADDING
         NUDGE_BODYINFO_STRUCT_EXTRA_PADDING /**< user stuff injected at the end of the BodyInfo struct */
 #       endif // NUDGE_BODYINFO_STRUCT_EXTRA_PADDING
@@ -473,7 +479,7 @@ namespace nudge {
 	
 	struct ContactImpulseData;
 	struct ContactConstraintData;
-	
+	        
     /**
      * \def NUDGE_INVALID_BODY_ID
      * Value of a body index in an invalid state
@@ -605,22 +611,15 @@ namespace nudge {
 #       ifdef NUDGE_CONTEXT_STRUCT_EXTRA_FIELDS
         NUDGE_CONTEXT_STRUCT_EXTRA_FIELDS /**< user stuff injected into the context_t struct */
 #       endif // NUDGE_CONTEXT_STRUCT_EXTRA_FIELDS
-#       ifndef NUDGE_CONTEXT_STRUCT_NO_USER_UNION
-        union {
-            void* userPtr;      /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            int64_t userInt64;    /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            uint64_t userUint64;    /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            double userDouble;      /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            int32_t userInt32[2];    /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            uint32_t userUint32[2];    /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            float userFloat[2];     /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            int16_t userInt16[4];   /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            uint16_t userUint16[4];   /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            int8_t userInt8[8];   /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-            uint8_t userUint8[8];  /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosed and used */
-        };
-#       endif // NUDGE_CONTEXT_STRUCT_NO_USER_UNION
+#       ifndef NUDGE_CONTEXT_STRUCT_NO_USER_DATA
+        UserData64Bit user;     /**< user data: a per-context user space in 11 different variable names that share the same space, so that ONLY one of them must be chosen and used */
+#       endif // NUDGE_CONTEXT_STRUCT_NO_USER_DATA
     };
+
+    /**
+     * @brief The AxisEnum enum
+     */
+    enum AxisEnum {AXIS_X=0,AXIS_Y=1,AXIS_Z=2};
 
 
 #   ifdef NUDGE_USE_TIME_CONTEXT
@@ -759,14 +758,14 @@ namespace nudge {
 
     /**
     * @defgroup main_group Main Functions
-    * @brief Set of functions regarding stepping the simulation and getting the body transform back
+    * @brief Set of functions regarding stepping the simulation and getting the body transforms back
     * @{
     */
     /**
      * @brief Mandatory function that must be called once per frame
      * @param c the nudge context
      * @param elapsedSecondsFromLastCall time tn seconds elapsed from last call
-     * @return the number of simulation substeps (i.e. physic frames) that will be executed in the next \ref simulate_step "simulate_step(...)" call
+     * @return the number of simulation substeps (i.e. physic frame substeps) that will be executed in the next \ref simulation_step "simulation_step(...)" call
      */
     unsigned pre_simulation_step(context_t* c,double elapsedSecondsFromLastCall);
 
@@ -854,7 +853,7 @@ namespace nudge {
      * @brief Adds a new body to the simulation with a compound collider made up of num_boxes box colliders and num_spheres sphere colliders
      * @param c the nudge context
      * @param mass positive => dynamic; 0 => static; negative => kinematic
-     * @param inertia an inertia tensor in a 3-float array form that is used only if mass is positive (see also the @ref inertia_group "inertia helper functions")
+     * @param inertia an inertia tensor in a 3-float array form that is used only if mass is positive (see also the @ref inertia_group "inertia helper functions"); it can be NULL (in that case a box inertia on the body axis-aligned bounding box extents is used)
      * @param num_boxes
      * @param hsizeTriplets pointer to an array of size 3*num_boxes floats
      * @param boxOffsetTransforms pointer to an array of num_boxes Transforms
@@ -862,30 +861,32 @@ namespace nudge {
      * @param radii pointer to an array of num_sphere floats
      * @param sphereOffsetTransforms pointer to an array of num_sphere Transforms
      * @param T a pointer to a Transform
-     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @param comOffset an optional input array of 3 floats that determines the center of mass offset of the body
+     * @param centerMeshAndRetrieveOldCenter3Out [experimental] an optional output array of 3 floats: if set, the input mesh is recentered (before applying the comOffset) and the axis-aligned bounding box center that has been subtracted from the mesh is returned
      * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if no more boxes can be added
      * @note When 'mass' is positive, 'inertia' must be valid, othewise the body inertia inverse is set to zero and the dynamic body won't rotate (nudge can't calculate the coumpound body extension to calculate a default inertia vector, so 'inertia' must be provided by the user)
      * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      */
-    unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_boxes, const float* hsizeTriplets, const Transform* boxOffsetTransforms, unsigned num_spheres, const float* radii, const Transform* sphereOffsetTransforms, const Transform* T=NULL, const float comOffset[3]=NULL);
+    unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_boxes, const float* hsizeTriplets, const Transform* boxOffsetTransforms, unsigned num_spheres, const float* radii, const Transform* sphereOffsetTransforms, const Transform* T=NULL, const float comOffset[3]=NULL, float *centerMeshAndRetrieveOldCenter3Out = NULL);
     /**
      * @brief Adds a new body to the simulation with a compound collider made up of num_boxes box colliders and num_spheres sphere colliders
      * @param c the nudge context
      * @param mass positive => dynamic; 0 => static; negative => kinematic
-     * @param inertia an inertia tensor in a 3-float array form that is used only if mass is positive (see also the @ref inertia_group "inertia helper functions")
+     * @param inertia an inertia tensor in a 3-float array form that is used only if mass is positive (see also the @ref inertia_group "inertia helper functions"); it can be NULL (in that case a box inertia on the body axis-aligned bounding box extents is used)
      * @param num_boxes
      * @param hsizeTriplets pointer to an array of size 3*num_boxes floats
      * @param boxOffsetMatrices16WithoutScaling pointer to an array of num_boxes*16 floats
      * @param num_spheres
      * @param radii pointer to an array of num_sphere floats
      * @param sphereOffsetMatrices16WithoutScaling pointer to an array of num_sphere*16 floats
-     * @param sphereOffsetMatrices16WithoutScaling a pointer to a 4x4 column-major matrix with only translation and rotation
-     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @param mMatrix16WithoutScaling a pointer to a 4x4 column-major matrix with only translation and rotation
+     * @param comOffset an optional input array of 3 floats that determines the center of mass offset of the body
+     * @param centerMeshAndRetrieveOldCenter3Out [experimental] an optional output array of 3 floats: if set, the input mesh is recentered (before applying the comOffset) and the axis-aligned bounding box center that has been subtracted from the mesh is returned
      * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if no more boxes can be added
      * @note When 'mass' is positive, 'inertia' must be valid, othewise the body inertia inverse is set to zero and the dynamic body won't rotate (nudge can't calculate the coumpound body extension to calculate a default inertia vector, so 'inertia' must be provided by the user)
      * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always reused and returned
      */
-    unsigned add_compound(context_t* c,float mass, float inertia[3],unsigned num_boxes,const float* hsizeTriplets,const float* boxOffsetMatrices16WithoutScaling,unsigned num_spheres,const float* radii,const float* sphereOffsetMatrices16WithoutScaling,const float* mMatrix16WithoutScaling=NULL, const float comOffset[3]=NULL);
+    unsigned add_compound(context_t* c,float mass, float inertia[3],unsigned num_boxes,const float* hsizeTriplets,const float* boxOffsetMatrices16WithoutScaling,unsigned num_spheres,const float* radii,const float* sphereOffsetMatrices16WithoutScaling,const float* mMatrix16WithoutScaling=NULL, const float comOffset[3]=NULL, float *centerMeshAndRetrieveOldCenter3Out = NULL);
 
     /**
      * @brief Removes a body from the simulation
@@ -896,9 +897,12 @@ namespace nudge {
      * @note Internally, removed bodies are kept in the c->global_data.removed_bodies array.
      * @note If you just want to reuse the body WITH THE SAME (optionally rescaled) collider(s) soon,
      * you should not remove the body, but just change its properties (more efficient + no delay).
-     * @note Sometimes it's better to not remove a body at all, but just disable it using: (*body_get_flags(...))|=BF_IS_DISABLE and optionally put it into a user-side custom list for later reusage/reactivation. This way the body colliders are preserved.
-     * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body c->global_data.removed_bodies[0] is always returned.
-     * @note Any non-physic user data is NOT reset when a body is removed, but all the physic data are reset (kinematic animations referencing removed bodies are assigned to \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" when the internal finalize_removed_bodies(...) function is called at the beginning of \ref simulation_step "simulation_step(...)" (there's an optional definition NUDGE_DELETE_KINEMATIC_ANIMATIONS_REFERENCING_REMOVED_BODIES to delete the kinematic animations instead)).
+     * @note Sometimes it's better to just disable a body, instead of removing it, using: (*body_get_flags(...))|=BF_IS_DISABLED: this way the body can be optionally put it into a user-side custom list for later reusage/reactivation. This way the body colliders are preserved.
+     * @note Every time an \ref add_group "add_xxx(...)" function is called, if c->global_data.finalized_removed_bodies_count>0, the body: c->global_data.removed_bodies[0] is always returned.
+     * @note User data in the \ref BodyInfo "BodyInfo" struct are NOT reset when a body is removed, but most of the other data are reset when removed bodies are finalized at the beginning of next \ref simulation_step "simulation_step(...)" call
+     * @note That means that when bodies are reused in \ref add_group "add_xxx(...)" functions, their old user data are preserved
+     * @note Kinematic animations referencing removed bodies are assigned to \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" when removed bodies are finalized (there's an optional definition NUDGE_DELETE_KINEMATIC_ANIMATIONS_REFERENCING_REMOVED_BODIES to delete the kinematic animations instead)
+     *
     */
     void remove_body(context_t* c,unsigned body);
     /**
@@ -933,7 +937,271 @@ namespace nudge {
      * @note A returned value of c->bodies.count can still be used, because the arrays are allocated at context init time, with a size of c->MAX_NUM_BODIES
      */
     inline unsigned get_next_add_body_index(context_t* c) {return c->global_data.finalized_removed_bodies_count>0?c->global_data.removed_bodies[0]:(c->bodies.count>=c->MAX_NUM_BODIES?NUDGE_INVALID_BODY_ID:c->bodies.count);}
+
+
+    /**
+     * @brief Recalculates the bounding box of the body (\ref BodyInfo "BodyInfo::aabb_center and BodyInfo::aabb_extents")
+     * @param c the nudge context
+     * @param body the body index
+     * @note This function is already called when bodies are added (see \ref add_group "add_xxx" functions); so it's almost pointless to call it again (except maybe when the size of some collider changes)
+     * @note nudge.h does not use the body bounding box at all: it has been added just to ease user experience
+    */
+    void body_recalculate_bounding_box(context_t* c,uint32_t body);
+
+    /**
+     * @brief [Experimental] Changes the body motion state (i.e. the BF_IS_STATIC_OR_KINEMATIC_OR_DYNAMIC group of body flags)
+     * @param c the nudge context
+     * @param body the index of the body
+     * @param new_motion_state the desired new motion state; it must be: BF_IS_STATIC, BF_IS_KINEMATIC or BF_IS_DYNAMIC
+     * @param mass_fallback a mass fallback used only when 'new_motion_state' is BF_IS_DYNAMIC and the current body mass inverse is exactly zero
+     * @note Experimental feature: use it at your own risk and for a limited and selected amount of bodies.
+     * @note This function resets the body velocities
+     * @note In case of BF_IS_DYNAMIC 'new_motion_state' this function can replace the components of inertia of the body (if its inverted components are all zero) with a box inertia on the body axis aligned bounding box
+     * @note In case of BF_IS_DYNAMIC 'new_motion_state', setting (or checking) the body mass and inertia before the call is recommended to avoid default reassignments
+     */
+    void body_change_motion_state(nudge::context_t* c,unsigned body,nudge::FlagMask new_motion_state,float mass_fallback=1.f);
+
     /** @} */ // end of add_group
+
+
+    /**
+     * @brief Gets the pointer to the body linear velocity (3-floats)
+     * @param c the nudge context
+     * @param body the index of the body
+     * @return a reference to the body linear velocity (a float3 array)
+     */
+    inline float* body_get_velocity(context_t* c,uint32_t body) {return c->bodies.momentum[body].velocity;}
+
+    /**
+     * @brief Gets the pointer to the body angular velocity (3-floats)
+     * @param c the nudge context
+     * @param body the index of the body
+     * @return a reference to the body angular velocity (a float3 array)
+     */
+    inline float* body_get_angular_velocity(context_t* c,uint32_t body) {return c->bodies.momentum[body].angular_velocity;}
+
+
+    /**
+     * @brief Gets the pointer to the body position (3-floats vector)
+     * @param c the nudge context
+     * @param body the index of the body
+     * @return a reference to the body position (a float3 array)
+     */
+    inline float* body_get_position(context_t* c,uint32_t body) {return c->bodies.transforms[body].p;}
+    /**
+     * @brief Gets the pointer to the body orientation (4-floats quaternion in {x,y,z,w} format)
+     * @param c the nudge context
+     * @param body the index of the body
+     * @return a reference to the body orientation (floats4 quaternion in {x,y,z,w} format)
+     */
+    inline float* body_get_orientation(context_t* c,uint32_t body) {return c->bodies.transforms[body].q;}
+
+
+    namespace extra {
+    /**
+     * @defgroup extra_group Optional Extra Functions
+     * @brief Set of helper functions that just wrap existing functions
+     * @{
+     */
+
+    /**
+     * @brief Adds a new body to the simulation with a compound collider that represent a prism of 4 or more lateral faces
+     * @param c the nudge context
+     * @param mass positive => dynamic; 0 => static; negative => kinematic
+     * @param radius the radius of the cylinder inscribed into the prism (the prism covers all the inscribed cylinder); please use (radius*cosf(M_PI/num_lateral_faces)) as radius for a prism that is entirely covered by the cylinder of radius: radius
+     * @param hheight the half height of the prism
+     * @param num_lateral_faces the number of lateral faces of the prism (must be >=4)
+     * @param T a pointer to a Transform
+     * @param axis one of the \ref AxisEnum "AXIS_X,AXIS_Y,AXIS_Z" values
+     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if not enough colliders can be added, or if the input arguments are not supported
+     * @note This function is just a wrapper around the \ref add_compound "add_compound(...)" function
+     * @note This function consumes at most 'num_lateral_faces' boxes
+     * @note This function can return \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" even if there are enough colliders (unlike \ref add_compound "add_compound(...)")
+     */
+    unsigned add_compound_prism(context_t* c,float mass,float radius,float hheight, unsigned num_lateral_faces=0,const Transform* T=NULL,AxisEnum axis=AXIS_Y,const float comOffset[3]=NULL);
+    /**
+     * @brief Adds a new body to the simulation with a compound collider that represent a prism of 4 or more lateral faces
+     * @param c the nudge context
+     * @param mass positive => dynamic; 0 => static; negative => kinematic
+     * @param radius the radius of the cylinder inscribed into the prism (the prism covers all the inscribed cylinder); please use (radius*cosf(M_PI/num_lateral_faces)) as radius for a prism that is entirely covered by the cylinder of radius: radius
+     * @param hheight the half height of the prism
+     * @param num_lateral_faces the number of lateral faces of the prism (must be >=4)
+     * @param mMatrix16WithoutScaling a pointer to a 4x4 column-major matrix with only translation and rotation
+     * @param axis one of the \ref AxisEnum "AXIS_X,AXIS_Y,AXIS_Z" values
+     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if not enough colliders can be added, or if the input arguments are not supported
+     * @note This function is just a wrapper around the \ref add_compound "add_compound(...)" function
+     * @note This function consumes at most 'num_lateral_faces' boxes
+     * @note This function can return \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" even if there are enough colliders (unlike \ref add_compound "add_compound(...)")
+     */
+    unsigned add_compound_prism(context_t* c, float mass, float radius, float hheight, unsigned num_lateral_faces, const float* mMatrix16WithoutScaling, AxisEnum axis=AXIS_Y, const float comOffset[3]=NULL);
+    /**
+     * @brief Adds a new body to the simulation with a compound collider that represent a cylinder
+     * @param c the nudge context
+     * @param mass positive => dynamic; 0 => static; negative => kinematic
+     * @param radius the radius of the cylinder
+     * @param hheight the half height of the cylinder
+     * @param T a pointer to a Transform
+     * @param axis one of the \ref AxisEnum "AXIS_X,AXIS_Y,AXIS_Z" values
+     * @param num_boxes the number of boxes to consume (0 is replaced by some predefined value)
+     * @param num_spheres the number of spheres to consume (0 is replaced by some predefined value)
+     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @param box_lateral_side_shrinking constant to tune how much the lateral half size of the box(es) is smaller than radius of the spheres (default value of -1 is replaced by some predefined value)
+     * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if not enough colliders can be added, or if the input arguments are not supported
+     * @note This function is just a wrapper around the \ref add_compound "add_compound(...)" function
+     * @note This function can return \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" even if there are enough colliders (unlike \ref add_compound "add_compound(...)")
+     */
+    unsigned add_compound_cylinder(context_t* c, float mass, float radius, float hheight, const Transform* T=NULL, AxisEnum axis=AXIS_Y, unsigned num_boxes=0, unsigned num_spheres=0, const float comOffset[3]=NULL, float box_lateral_side_shrinking=-1.f);
+    /**
+     * @brief Adds a new body to the simulation with a compound collider that represent a cylinder
+     * @param c the nudge context
+     * @param mass positive => dynamic; 0 => static; negative => kinematic
+     * @param radius the radius of the cylinder
+     * @param hheight the half height of the cylinder
+     * @param mMatrix16WithoutScaling  a pointer to a 4x4 column-major matrix with only translation and rotation
+     * @param axis one of the \ref AxisEnum "AXIS_X,AXIS_Y,AXIS_Z" values
+     * @param num_boxes the number of boxes to consume (0 is replaced by some predefined value)
+     * @param num_spheres the number of spheres to consume (0 is replaced by some predefined value)
+     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @param box_lateral_side_shrinking constant to tune how much the lateral half size of the box(es) is smaller than radius of the spheres (default value of -1 is replaced by some predefined value)
+     * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if not enough colliders can be added, or if the input arguments are not supported
+     * @note This function is just a wrapper around the \ref add_compound "add_compound(...)" function
+     * @note This function can return \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" even if there are enough colliders (unlike \ref add_compound "add_compound(...)")
+     */
+    unsigned add_compound_cylinder(context_t* c,float mass,float radius,float hheight, const float* mMatrix16WithoutScaling,AxisEnum axis=AXIS_Y,unsigned num_boxes=0,unsigned num_spheres=0,const float comOffset[3]=NULL, float box_lateral_side_shrinking=-1.f);
+    /**
+     * @brief Adds a new body to the simulation with a compound collider that represent a capsule
+     * @param c the nudge context
+     * @param mass positive => dynamic; 0 => static; negative => kinematic
+     * @param radius the radius of the capsule
+     * @param hheight the half height of the cylinder that compose the capsule (if it's zero, then the capsule becomes a sphere)
+     * @param T a pointer to a Transform
+     * @param axis one of the \ref AxisEnum "AXIS_X,AXIS_Y,AXIS_Z" values
+     * @param num_boxes the number of boxes to consume (0 is replaced by some predefined value)
+     * @param num_spheres the number of spheres to consume (0 is replaced by some predefined value)
+     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @param box_lateral_side_shrinking constant to tune how much the lateral half size of the box(es) is smaller than radius of the spheres (default value of -1 is replaced by some predefined value)
+     * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if not enough colliders can be added, or if the input arguments are not supported
+     * @note This function is just a wrapper around the \ref add_compound "add_compound(...)" function
+     * @note This function can return \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" even if there are enough colliders (unlike \ref add_compound "add_compound(...)")
+     */
+    unsigned add_compound_capsule(context_t* c,float mass,float radius,float hheight, const Transform* T=NULL,AxisEnum axis=AXIS_Y,unsigned num_boxes=1,unsigned num_spheres=3,const float comOffset[3]=NULL, float box_lateral_side_shrinking=-1.f);
+    /**
+     * @brief Adds a new body to the simulation with a compound collider that represent a cylinder
+     * @param c the nudge context
+     * @param mass positive => dynamic; 0 => static; negative => kinematic
+     * @param radius the radius of the cylinder
+     * @param hheight the half height of the cylinder
+     * @param mMatrix16WithoutScaling  a pointer to a 4x4 column-major matrix with only translation and rotation
+     * @param axis one of the \ref AxisEnum "AXIS_X,AXIS_Y,AXIS_Z" values
+     * @param num_boxes the number of boxes to consume (0 is replaced by some predefined value)
+     * @param num_spheres the number of spheres to consume (0 is replaced by some predefined value)
+     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @param box_lateral_side_shrinking constant to tune how much the lateral half size of the box(es) is smaller than radius of the spheres (default value of -1 is replaced by some predefined value)
+     * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if not enough colliders can be added, or if the input arguments are not supported
+     * @note This function is just a wrapper around the \ref add_compound "add_compound(...)" function
+     * @note This function can return \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" even if there are enough colliders (unlike \ref add_compound "add_compound(...)")
+     */
+    unsigned add_compound_capsule(context_t* c,float mass,float radius,float hheight, const float* mMatrix16WithoutScaling,AxisEnum axis=AXIS_Y,unsigned num_boxes=1,unsigned num_spheres=3,const float comOffset[3]=NULL, float box_lateral_side_shrinking=-1.f);
+    /**
+     * @brief Adds a new body to the simulation with a compound collider that represent the hollow lateral surface of a cylinder
+     * @param c the nudge context
+     * @param mass positive => dynamic; 0 => static; negative => kinematic
+     * @param min_radius the minimum radius that starts at the center of the cylinder
+     * @param max_radius the maximum radius that starts at the center of the cylinder (the whole depth is: max_radius - min_radius)
+     * @param hheight the half height of the cylinder
+     * @param T a pointer to a Transform
+     * @param axis one of the \ref AxisEnum "AXIS_X,AXIS_Y,AXIS_Z" values
+     * @param num_boxes the number of boxes to consume (0 is replaced by some predefined value)
+     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if not enough colliders can be added, or if the input arguments are not supported
+     * @note This function is just a wrapper around the \ref add_compound "add_compound(...)" function
+     * @note This function can return \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" even if there are enough colliders (unlike \ref add_compound "add_compound(...)")
+     */
+    unsigned add_compound_hollow_cylinder(context_t* c,float mass,float min_radius,float max_radius,float hheight, const Transform* T=NULL,AxisEnum axis=AXIS_Y,unsigned num_boxes=8,const float comOffset[3]=NULL);
+    /**
+     * @brief Adds a new body to the simulation with a compound collider that represent the hollow lateral surface of a cylinder
+     * @param c the nudge context
+     * @param mass positive => dynamic; 0 => static; negative => kinematic
+     * @param min_radius the minimum radius that starts at the center of the cylinder
+     * @param max_radius the maximum radius that starts at the center of the cylinder (the whole depth is: max_radius - min_radius)
+     * @param hheight the half height of the cylinder
+     * @param mMatrix16WithoutScaling a pointer to a 4x4 column-major matrix with only translation and rotation
+     * @param axis one of the \ref AxisEnum "AXIS_X,AXIS_Y,AXIS_Z" values
+     * @param num_boxes the number of boxes to consume (0 is replaced by some predefined value)
+     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if not enough colliders can be added, or if the input arguments are not supported
+     * @note This function is just a wrapper around the \ref add_compound "add_compound(...)" function
+     * @note This function can return \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" even if there are enough colliders (unlike \ref add_compound "add_compound(...)")
+     */
+    unsigned add_compound_hollow_cylinder(context_t* c,float mass,float min_radius,float max_radius,float hheight, const float* mMatrix16WithoutScaling, AxisEnum axis=AXIS_Y, unsigned num_boxes=8, const float comOffset[3]=NULL);
+    /**
+     * @brief Adds a new body to the simulation with a compound collider that represent a torus
+     * @param c the nudge context
+     * @param mass positive => dynamic; 0 => static; negative => kinematic
+     * @param radius the radius that starts at the origin of the shape and ends in the middle of the rotational donut-like solid
+     * @param inner_radius the internal radius of the donut-like solid (so that maximum_radius = radius + inner_radius represent the maximum radius of the shape, starting at its origin)
+     * @param T a pointer to a Transform
+     * @param axis one of the \ref AxisEnum "AXIS_X,AXIS_Y,AXIS_Z" values
+     * @param num_boxes the number of boxes to consume (0 is replaced by some predefined value)
+     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if not enough colliders can be added, or if the input arguments are not supported
+     * @note This function is just a wrapper around the \ref add_compound "add_compound(...)" function
+     * @note This function can return \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" even if there are enough colliders (unlike \ref add_compound "add_compound(...)")
+     */
+    unsigned add_compound_torus(context_t* c,float mass,float radius,float inner_radius, const Transform* T=NULL,AxisEnum axis=AXIS_Y,unsigned num_boxes=8,const float comOffset[3]=NULL);
+    /**
+     * @brief Adds a new body to the simulation with a compound collider that represent a torus
+     * @param c the nudge context
+     * @param mass positive => dynamic; 0 => static; negative => kinematic
+     * @param radius the radius that starts at the origin of the shape and ends in the middle of the rotational donut-like solid
+     * @param inner_radius the internal radius of the donut-like solid (so that maximum_radius = radius + inner_radius represent the maximum radius of the shape, starting at its origin)
+     * @param mMatrix16WithoutScaling a pointer to a 4x4 column-major matrix with only translation and rotation
+     * @param axis one of the \ref AxisEnum "AXIS_X,AXIS_Y,AXIS_Z" values
+     * @param num_boxes the number of boxes to consume (0 is replaced by some predefined value)
+     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if not enough colliders can be added, or if the input arguments are not supported
+     * @note This function is just a wrapper around the \ref add_compound "add_compound(...)" function
+     * @note This function can return \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" even if there are enough colliders (unlike \ref add_compound "add_compound(...)")
+     */
+    unsigned add_compound_torus(context_t* c,float mass,float radius,float inner_radius, const float* mMatrix16WithoutScaling,AxisEnum axis=AXIS_Y,unsigned num_boxes=8,const float comOffset[3]=NULL);
+    /**
+     * @brief Adds a new body to the simulation with a compound collider that represent an approximated cone
+     * @param c the nudge context
+     * @param mass positive => dynamic; 0 => static; negative => kinematic
+     * @param radius the radius of the cone
+     * @param hheight the half height of the cone
+     * @param T a pointer to a Transform
+     * @param axis one of the \ref AxisEnum "AXIS_X,AXIS_Y,AXIS_Z" values
+     * @param num_boxes the number of boxes to consume (0 is replaced by some predefined value)
+     * @param num_spheres the number of spheres to consume (0 is replaced by some predefined value)
+     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if not enough colliders can be added
+     * @note This function is just a wrapper around the \ref add_compound "add_compound(...)" function
+     * @note The constructed shape is a raw approximatation, and the comOffset itself should not be at zero by default in a cone
+     */
+    unsigned add_compound_cone(context_t* c, float mass, float radius, float hheight, const Transform* T=NULL, AxisEnum axis=AXIS_Y, unsigned num_boxes=0, unsigned num_spheres=0, const float comOffset[3]=NULL);
+    /**
+     * @brief Adds a new body to the simulation with a compound collider that represent an approximated cone
+     * @param c the nudge context
+     * @param mass positive => dynamic; 0 => static; negative => kinematic
+     * @param radius the radius of the cone
+     * @param hheight the half height of the cone
+     * @param mMatrix16WithoutScaling  a pointer to a 4x4 column-major matrix with only translation and rotation
+     * @param axis one of the \ref AxisEnum "AXIS_X,AXIS_Y,AXIS_Z" values
+     * @param num_boxes the number of boxes to consume (0 is replaced by some predefined value)
+     * @param num_spheres the number of spheres to consume (0 is replaced by some predefined value)
+     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if not enough colliders can be added
+     * @note This function is just a wrapper around the \ref add_compound "add_compound(...)" function
+     * @note The constructed shape is a raw approximatation, and the comOffset itself should not be at zero by default in a cone
+     */
+    unsigned add_compound_cone(context_t* c, float mass, float radius, float hheight, const float* mMatrix16WithoutScaling, AxisEnum axis=AXIS_Y, unsigned num_boxes=0, unsigned num_spheres=0, const float comOffset[3]=NULL);
+
+
+    /** @} */ // end of extra_group
+    } // namespace extra
 
     /**
      * @defgroup filter_group Filter-Bodies Functions
@@ -976,18 +1244,18 @@ namespace nudge {
     /**
      * @brief [Untested] Reserve additional space for \ref KinematicData "KinematicData" key frames
      * @param kd \ref KinematicData "KinematicData" instance (typically c->kinematic_data)
-     * @param new_size the size required for the key frames (after the call the new capacity could be bigger)
+     * @param new_size the new size required for the whole key frames (after the call the new capacity could be bigger)
      * @note The effect of this function is only the modification of the key frames capacity
      */
     void kinematic_data_reserve_key_frames(KinematicData* kd, size_t new_size);
     /**
      * @brief [Untested] Reserve additional space for \ref KinematicData "KinematicData" animations
      * @param kd \ref KinematicData "KinematicData" instance (typically c->kinematic_data)
-     * @param new_size the size required for the animations (after the call the new capacity could be bigger)
+     * @param new_size the new size required for the whole animation array (after the call the new capacity could be bigger)
      * @note The effect of this function is only the modification of the animation capacity
      */
     void kinematic_data_reserve_animations(KinematicData* kd, size_t new_size);
-    /** @} */ // end of kinematic_animation_group
+    /** @} */ // end of kinematic_animation_group  
 
     /**
      * @defgroup log_group Log Functions
@@ -1092,7 +1360,7 @@ namespace nudge {
      * @return same as result4 (for chaining the call only)
      * @note Functions with the nm_ prefix have been imported by the \link https://github.com/Flix01/Header-Only-GL-Helpers/blob/master/minimath.h minimath \endlink library (MIT license). These functions might be renamed, removed or hidden in the future
      */
-    float* nm_QuatFromMat4(float* __restrict result4,const float* __restrict m16);
+    float* nm_QuatFromMat4(float* __restrict result4,const float* __restrict m16);  
     /**
      * @brief Replaces the 3x3 submatrix of a 16-floats column-major matrix with the 3x3 matrix representing the given quaternion
      * @param result16 the input/output 16-floats column-major matrix
@@ -1101,6 +1369,22 @@ namespace nudge {
      * @note Functions with the nm_ prefix have been imported by the \link https://github.com/Flix01/Header-Only-GL-Helpers/blob/master/minimath.h minimath \endlink library (MIT license). These functions might be renamed, removed or hidden in the future
      */
     float* nm_Mat4SetRotationFromQuat(float* __restrict result16,const float* __restrict q4);
+    /**
+     * @brief Turns the 3x3 9-floats column-major rotation matrix (without scaling applied) into a quaternion
+     * @param result4 the resulting quaternion in 4-floats format
+     * @param m9 the input 9-floats column-major rotation matrix (without scaling applied)
+     * @return same as result4 (for chaining the call only)
+     * @note Functions with the nm_ prefix have been imported by the \link https://github.com/Flix01/Header-Only-GL-Helpers/blob/master/minimath.h minimath \endlink library (MIT license). These functions might be renamed, removed or hidden in the future
+    */
+    float* nm_QuatFromMat3(float* __restrict result4,const float* __restrict m9);
+    /**
+     * @brief Converts the given quaternion the a 3x3 9-floats column-major rotation matrix
+     * @param result9 the input/output 9-floats column-major rotation matrix
+     * @param q4 the input quaternion in 4-floats format
+     * @return same as result9 (for chaining the call only)
+     * @note Functions with the nm_ prefix have been imported by the \link https://github.com/Flix01/Header-Only-GL-Helpers/blob/master/minimath.h minimath \endlink library (MIT license). These functions might be renamed, removed or hidden in the future
+    */
+    float* nm_Mat3FromQuat(float* __restrict result9,const float* __restrict q4);
     /**
      * @brief Given an old and a new quaternion and a small time step, it calculates the angular velocities
      * @param angVel3 the resulting angular velocity between the two quaternions
@@ -1158,9 +1442,25 @@ namespace nudge {
     /**
      * @brief Normalizes a 3-floats vector in place
      * @param v3 the input/output 3-floats vector
+     * @return the length of the input 3-floats vector
      * @note Functions with the nm_ prefix have been imported by the \link https://github.com/Flix01/Header-Only-GL-Helpers/blob/master/minimath.h minimath \endlink library (MIT license). These functions might be renamed, removed or hidden in the future
      */
-    void nm_Vec3Normalize(float* __restrict v3);
+    float nm_Vec3Normalize(float* __restrict v3);
+    /**
+     * @brief Get a normalizes copy of an input 3-floats vector
+     * @param v3Out the output 3-floats vector
+     * @param v3 the input 3-floats vector
+     * @return the length of the input 3-floats vector (v3)
+     * @note Functions with the nm_ prefix have been imported by the \link https://github.com/Flix01/Header-Only-GL-Helpers/blob/master/minimath.h minimath \endlink library (MIT license). These functions might be renamed, removed or hidden in the future
+     */
+    float nm_Vec3Normalized(float* __restrict v3Out,const float* __restrict v3);
+    /**
+     * @brief Computes the dot product between two 3-floats vectors
+     * @param a3 the first input 3-floats vector
+     * @param b3 the second input 3-floats vector
+     * @return the resulting dot product
+    */
+    float nm_Vec3Dot(const float* __restrict a3,const float* __restrict b3);
     /**
      * @brief Computes the cross product between two 3-floats vectors
      * @param vOut3 the output 3-floats vector
@@ -1201,7 +1501,6 @@ namespace nudge {
     inline float* nm_QuatGetAxisY(float* __restrict axisOut3,const float* __restrict q4) {return nm_QuatGetAxis(axisOut3,q4,0,1,0);}
     inline float* nm_QuatGetAxisZ(float* __restrict axisOut3,const float* __restrict q4) {return nm_QuatGetAxis(axisOut3,q4,0,0,1);}
 
-
     /**
      * @brief Rotates an input 4-floats unit quaternion by an angle in radians around a specified axis
      * @param qInOut4 the input/output 4-floats unit quaternion
@@ -1215,6 +1514,16 @@ namespace nudge {
      */
     float* nm_QuatRotate(float* __restrict qInOut4,float angle,float axisX,float axisY,float axisZ);
 
+    /**
+     * @brief Multiplies two column-major 16-floats 4x4 matrices
+     * @param result16 the resulting column-major 16-floats 4x4 matrix (can be the same as one of the other arguments)
+     * @param ml16 the first column-major 16-floats 4x4 matrix (can be the same as one of the other arguments)
+     * @param mr16 the second column-major 16-floats 4x4 matrix (can be the same as one of the other arguments)
+     * @return the same as result16 (for chaining effect only)
+     * @note This function is never used in nudge.h
+     * @note Functions with the nm_ prefix have been imported by the \link https://github.com/Flix01/Header-Only-GL-Helpers/blob/master/minimath.h minimath \endlink library (MIT license). These functions might be renamed, removed or hidden in the future
+     */
+    float* nm_Mat4Mul(float* result16,const float* ml16,const float* mr16);
     /** @} */ // end of math_group
 
     /**
@@ -1224,17 +1533,19 @@ namespace nudge {
      */
     void calculate_box_inertia(float result[3],float mass,float hsizex,float hsizey,float hsizez,const float comOffset[3]=NULL);
     void calculate_sphere_inertia(float result[3],float mass,float radius,const float comOffset[3]=NULL,bool hollow=false);
-    void calculate_cylinder_inertia(float result[3],float mass,float radius,float halfHeight,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
-    void calculate_capsule_inertia(float result[3],float mass,float radius,float halfCylinderHeight,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
-    void calculate_torus_inertia(float result[3],float mass,float majorRadius,float minorRadius,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
-    void calculate_hollow_cylinder_inertia(float result[3],float mass,float R,float r,float halfHeight,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
+    void calculate_cylinder_inertia(float result[3],float mass,float radius,float halfHeight,AxisEnum upAxis=AXIS_Y,const float comOffset[3]=NULL);
+    void calculate_capsule_inertia(float result[3],float mass,float radius,float halfCylinderHeight,AxisEnum upAxis=AXIS_Y,const float comOffset[3]=NULL);
+    void calculate_torus_inertia(float result[3],float mass,float majorRadius,float minorRadius,AxisEnum upAxis=AXIS_Y,const float comOffset[3]=NULL);
+    void calculate_hollow_cylinder_inertia(float result[3], float mass, float R, float r, float halfHeight, AxisEnum upAxis=AXIS_Y, const float comOffset[3]=NULL);
+    void calculate_cone_inertia(float result[3],float mass,float radius,float halfHeight,AxisEnum upAxis=AXIS_Y,const float comOffset[3]=NULL);
 
     void calculate_box_inertia_inverse(float result[3],float mass,float hsizex,float hsizey,float hsizez,const float comOffset[3]=NULL);
     void calculate_sphere_inertia_inverse(float result[3],float mass,float radius,const float comOffset[3]=NULL,bool hollow=false);
-    void calculate_cylinder_inertia_inverse(float result[3],float mass,float radius,float halfHeight,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
-    void calculate_capsule_inertia_inverse(float result[3],float mass,float radius,float halfCylinderHeight,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
-    void calculate_torus_inertia_inverse(float result[3],float mass,float majorRadius,float minorRadius,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
-    void calculate_hollow_cylinder_inertia_inverse(float result[3],float mass,float R,float r,float halfHeight,unsigned short upAxisIn0_2=1,const float comOffset[3]=NULL);
+    void calculate_cylinder_inertia_inverse(float result[3], float mass, float radius, float halfHeight, AxisEnum upAxis=AXIS_Y, const float comOffset[3]=NULL);
+    void calculate_capsule_inertia_inverse(float result[3], float mass, float radius, float halfCylinderHeight, AxisEnum upAxis=AXIS_Y, const float comOffset[3]=NULL);
+    void calculate_torus_inertia_inverse(float result[3],float mass,float majorRadius,float minorRadius,AxisEnum upAxis=AXIS_Y,const float comOffset[3]=NULL);
+    void calculate_hollow_cylinder_inertia_inverse(float result[3], float mass, float R, float r, float halfHeight, AxisEnum upAxis=AXIS_Y, const float comOffset[3]=NULL);
+    void calculate_cone_inertia_inverse(float result[3], float mass, float radius, float halfHeight, AxisEnum upAxis=AXIS_Y, const float comOffset[3]=NULL);
     /** @} */ // end of inertia
 
 
@@ -2559,11 +2870,11 @@ static inline void _mm_free (void * ptr) {
 void* malloc(size_t size)   {return _mm_malloc(size,64);}
 void free(void* ptr)    {_mm_free(ptr);}
 
-float* nm_QuatFromMat4(float* __restrict result4,const float* __restrict m16)  {
+inline float* nm_QuatFromMat3Or4(float* __restrict result4,const float* __restrict m16,int num_m16_cols=4)  {
     // this code is glm based
     float* q=result4;const float* m=m16;
-    float *qx=&q[0],*qy=&q[1],*qz=&q[2],*qw=&q[3];
-    const float c00=m[0],c01=m[1],c02=m[2], c10=m[4],c11=m[5],c12=m[6], c20=m[8],c21=m[9],c22=m[10];
+    float *qx=&q[0],*qy=&q[1],*qz=&q[2],*qw=&q[3];const int bc2=num_m16_cols,bc3=num_m16_cols*2;
+    const float c00=m[0],c01=m[1],c02=m[2], c10=m[bc2],c11=m[bc2+1],c12=m[bc2+2], c20=m[bc3],c21=m[bc3+1],c22=m[bc3+2];
 
     float fourXSquaredMinus1 = c00 - c11 - c22, fourYSquaredMinus1 = c11 - c00 - c22;
     float fourZSquaredMinus1 = c22 - c00 - c11, fourWSquaredMinus1 = c00 + c11 + c22;
@@ -2598,12 +2909,15 @@ float* nm_QuatFromMat4(float* __restrict result4,const float* __restrict m16)  {
     }
     return result4;
 }
-float* nm_Mat4SetRotationFromQuat(float* __restrict result16,const float* __restrict q4)    {
+float* nm_QuatFromMat4(float* __restrict result4,const float* __restrict m16)  {return nm_QuatFromMat3Or4(result4,m16,4);}
+float* nm_QuatFromMat3(float* __restrict result4,const float* __restrict m9)  {return nm_QuatFromMat3Or4(result4,m9,3);}
+
+inline float* nm_Mat3Or4SetRotationFromQuat(float* __restrict result16,const float* __restrict q4,int num_res_cols=4)    {
     // this code is glm based
     const float one =(float)1,two=(float)2;
     float* m=result16;const float* q=q4;
-    const float qx=q[0],qy=q[1],qz=q[2],qw=q[3];
-    float *c00=&m[0],*c01=&m[1],*c02=&m[2], *c10=&m[4],*c11=&m[5],*c12=&m[6], *c20=&m[8],*c21=&m[9],*c22=&m[10];
+    const float qx=q[0],qy=q[1],qz=q[2],qw=q[3];const int bc2=num_res_cols,bc3=num_res_cols*2;
+    float *c00=&m[0],*c01=&m[1],*c02=&m[2], *c10=&m[bc2],*c11=&m[bc2+1],*c12=&m[bc2+2], *c20=&m[bc3],*c21=&m[bc3+1],*c22=&m[bc3+2];
 
     float qxx = (qx * qx), qyy = (qy * qy), qzz = (qz * qz);
     float qxz = (qx * qz), qxy = (qx * qy), qyz = (qy * qz);
@@ -2615,6 +2929,9 @@ float* nm_Mat4SetRotationFromQuat(float* __restrict result16,const float* __rest
 
     return result16;
 }
+float* nm_Mat4SetRotationFromQuat(float* __restrict result16,const float* __restrict q4)    {return nm_Mat3Or4SetRotationFromQuat(result16,q4,4);}
+float* nm_Mat3FromQuat(float* __restrict result9,const float* __restrict q4)    {return nm_Mat3Or4SetRotationFromQuat(result9,q4,3);}
+
 void nm_QuatGetAngularVelocity(float* __restrict angVel3,const float* newQuat4,const float* oldQuat4,float halfTimeStep)   {
     // assert: this works for unit length quaternions only
     // oldQuat4 and newQuat4 must be 'close' for this to work (small halfTimeStep)
@@ -2698,6 +3015,7 @@ void nm_QuatAdvance(float* __restrict qOut4,const float* __restrict q4,const flo
 
     //nm_QuatIntegrateAngularVelocityApprox(qOut4,q4,angVel3,halfTimeStep*2.0);   // is this better?
 }
+float nm_Vec3Dot(const float* __restrict a3,const float* __restrict b3) {return a3[0]*b3[0]+a3[1]*b3[1]+a3[2]*b3[2];}
 float* nm_Vec3Cross(float* __restrict vOut3,const float* __restrict a3,const float* __restrict b3) {
     vOut3[0] =	a3[1] * b3[2] - a3[2] * b3[1];
     vOut3[1] =	a3[2] * b3[0] - a3[0] * b3[2];
@@ -2707,10 +3025,17 @@ float* nm_Vec3Cross(float* __restrict vOut3,const float* __restrict a3,const flo
 #ifndef NM_EPSILON
 #   define NM_EPSILON (0.00000000001f)
 #endif
-void nm_Vec3Normalize(float* __restrict v3) {
+float nm_Vec3Normalize(float* __restrict v3) {
     float len = v3[0]*v3[0]+v3[1]*v3[1]+v3[2]*v3[2];int i;
     if (len>NM_EPSILON) {len = sqrtf(len);for (i=0;i<3;i++) v3[i]/=len;}
-    else {v3[0]=v3[2]=(float)0;v3[1]=(float)1;}
+    else {len=v3[0]=v3[2]=(float)0;v3[1]=(float)1;}
+    return len;
+}
+float nm_Vec3Normalized(float* __restrict v3Out,const float* __restrict v3) {
+    float len = v3[0]*v3[0]+v3[1]*v3[1]+v3[2]*v3[2];int i;
+    if (len>NM_EPSILON) {len = sqrtf(len);for (i=0;i<3;i++) v3Out[i]=v3[i]/len;}
+    else {len=v3Out[0]=v3Out[2]=(float)0;v3Out[1]=(float)1;}
+    return len;
 }
 void nm_QuatNormalize(float* __restrict q4) {const float len=sqrtf(q4[0]*q4[0]+q4[1]*q4[1]+q4[2]*q4[2]+q4[3]*q4[3]);if (len>0) {q4[0]/=len;q4[1]/=len;q4[2]/=len;q4[3]/=len;} else {q4[0]=q4[1]=q4[2]=q4[3]=(float)0;}}
 float* nm_QuatSlerpEps(float* __restrict result4,const float* __restrict a4,const float* __restrict b4,float slerpTime_In_0_1,int normalizeResult4AfterLerp/*=1*/,float eps/*= NM_SLERP_EPSILON*/)  {
@@ -2855,6 +3180,23 @@ float* nm_QuatRotate(float* __restrict qInOut4,float angle,float axisX,float axi
     float qa[4];nm_QuatFromAngleAxis(qa,angle,axisX,axisY,axisZ);
     return nm_QuatMul(qInOut4,qInOut4,qa);
 }
+inline float* nm_Mat4Mul_NoCheck(float* __restrict result16,const float* __restrict ml16,const float* __restrict mr16)   {
+   int i,i4;float mri4plus0,mri4plus1,mri4plus2,mri4plus3;
+   for(i = 0; i < 4; i++) {
+       i4=4*i;mri4plus0=mr16[i4];mri4plus1=mr16[i4+1];mri4plus2=mr16[i4+2];mri4plus3=mr16[i4+3];
+       result16[  i4] = ml16[0]*mri4plus0 + ml16[4]*mri4plus1 + ml16[ 8]*mri4plus2 + ml16[12]*mri4plus3;
+       result16[1+i4] = ml16[1]*mri4plus0 + ml16[5]*mri4plus1 + ml16[ 9]*mri4plus2 + ml16[13]*mri4plus3;
+       result16[2+i4] = ml16[2]*mri4plus0 + ml16[6]*mri4plus1 + ml16[10]*mri4plus2 + ml16[14]*mri4plus3;
+       result16[3+i4] = ml16[3]*mri4plus0 + ml16[7]*mri4plus1 + ml16[11]*mri4plus2 + ml16[15]*mri4plus3;
+   }
+   return result16;
+}
+float* nm_Mat4Mul(float* result16,const float* ml16,const float* mr16) {
+   if (result16==ml16) {float ML16[16];memcpy(ML16,ml16,16*sizeof(float));return nm_Mat4Mul_NoCheck(result16,ML16,mr16);}
+   else if (result16==mr16) {float MR16[16];memcpy(MR16,mr16,16*sizeof(float));return nm_Mat4Mul_NoCheck(result16,ml16,MR16);}
+   return nm_Mat4Mul_NoCheck(result16,ml16,mr16);
+}
+
 void TransformAssignToBody(context_t* c,unsigned body,Transform newT,float deltaTime,int16_t aux_body)   {
     assert(c && body<c->bodies.count);
     BodyFilter* filter = &c->bodies.filters[body];
@@ -2959,24 +3301,23 @@ void calculate_sphere_inertia_inverse(float result[3], float mass, float radius,
     }
     else memset(result, 0, 3*sizeof(float));
 }
-void calculate_cylinder_inertia(float result[3],float mass,float radius,float halfHeight,unsigned short upAxisIn0_2,const float comOffset[3])  {
+void calculate_cylinder_inertia(float result[3], float mass, float radius, float halfHeight, AxisEnum upAxis, const float comOffset[3])  {
     if (mass>0.f)   {
         float radius2 = radius*radius,  h2 = halfHeight*halfHeight*4.f;
-        assert(upAxisIn0_2<3);
         result[0] = result[1] = result[2] = mass*(3.f*radius2+h2)/12.f;
-        result[upAxisIn0_2] = mass*radius2/2.f;
+        result[upAxis] = mass*radius2/2.f;
         if (comOffset) {for (int l=0;l<3;l++)   result[l]+=mass*comOffset[l]*comOffset[l];} // hope it's correct
     }
     else memset(result, 0, 3*sizeof(float));
 }
-void calculate_cylinder_inertia_inverse(float result[3],float mass,float radius,float halfHeight,unsigned short upAxisIn0_2,const float comOffset[3])  {
+void calculate_cylinder_inertia_inverse(float result[3],float mass,float radius,float halfHeight,AxisEnum upAxis,const float comOffset[3])  {
     if (mass>0.f)   {
-        calculate_cylinder_inertia(result,mass,radius,halfHeight,upAxisIn0_2,comOffset);
+        calculate_cylinder_inertia(result,mass,radius,halfHeight,upAxis,comOffset);
         for (int i=0;i<3;i++) result[i] = 1.f/result[i];
     }
     else memset(result, 0, 3*sizeof(float));
 }
-void calculate_capsule_inertia(float result[3],float mass,float radius,float halfCylinderHeight,unsigned short upAxisIn0_2,const float comOffset[3])  {
+void calculate_capsule_inertia(float result[3], float mass, float radius, float halfCylinderHeight, AxisEnum upAxis, const float comOffset[3])  {
     // based on https://xissburg.github.io/2022-10-01-calculating-moment-of-inertia-capsule/
     if (mass>0.f)   {
         const float L = 2.f*halfCylinderHeight;
@@ -2985,74 +3326,73 @@ void calculate_capsule_inertia(float result[3],float mass,float radius,float hal
         const float Mcyl = mass*Vcyl/Vtot, Mhem = mass*Vhem/Vtot;
         const float Icyl = Mcyl*(L*L+3.f*radius2)/12.f;
         const float Ihem = Mhem*radius2/2.5f;
-        assert(upAxisIn0_2<3);
         result[0] = result[1] = result[2] = Icyl + 2.f*Ihem + Mhem*(4.f*L+3*radius)*(4.f*L+3*radius)/32.f;
-        result[upAxisIn0_2] = (5.f*Mcyl+8.f*Mhem)*radius2*0.1f;
+        result[upAxis] = (5.f*Mcyl+8.f*Mhem)*radius2*0.1f;
         if (comOffset) {for (int l=0;l<3;l++)   result[l]+=mass*comOffset[l]*comOffset[l];} // hope it's correct
     }
     else memset(result, 0, 3*sizeof(float));
 }
-void calculate_capsule_inertia_inverse(float result[3],float mass,float radius,float halfCylinderHeight,unsigned short upAxisIn0_2,const float comOffset[3])  {
+void calculate_capsule_inertia_inverse(float result[3],float mass,float radius,float halfCylinderHeight,AxisEnum upAxis,const float comOffset[3])  {
     if (mass>0.f)   {
-        calculate_capsule_inertia(result,mass,radius,halfCylinderHeight,upAxisIn0_2,comOffset);
+        calculate_capsule_inertia(result,mass,radius,halfCylinderHeight,upAxis,comOffset);
         for (int i=0;i<3;i++) result[i] = 1.f/result[i];
     }
     else memset(result, 0, 3*sizeof(float));
 }
-/**
- * @brief calculate_hollow_cylinder_inertia
- * @param result
- * @param mass
- * @param R the total radius of the cylinder (including the border depth)
- * @param r must be: R-border_depth
- * @param halfHeight
- * @param upAxisIn0_2
- * @param comOffset
- */
-void calculate_hollow_cylinder_inertia(float result[3],float mass,float R,float r,float halfHeight,unsigned short upAxisIn0_2,const float comOffset[3])  {
-    // same as calculate_cylinder_inertia, but with: radius = sqrtf(R*R+r*r)
+void calculate_hollow_cylinder_inertia(float result[3],float mass,float R,float r,float halfHeight,AxisEnum upAxis,const float comOffset[3])  {
+    // R the total radius of the cylinder (including the border depth)
+    // r must be: R-border_depth
+    // => same as calculate_cylinder_inertia, but with: radius = sqrtf(R*R+r*r)
     if (mass>0.f)   {
         float radius2 = R*R+r*r,  h2 = halfHeight*halfHeight*4.f;
-        assert(upAxisIn0_2<3);
         result[0] = result[1] = result[2] = mass*(3.f*radius2+h2)/12.f;
-        result[upAxisIn0_2] = mass*radius2/2.f;
+        result[upAxis] = mass*radius2/2.f;
         if (comOffset) {for (int l=0;l<3;l++)   result[l]+=mass*comOffset[l]*comOffset[l];} // hope it's correct
     }
     else memset(result, 0, 3*sizeof(float));
 }
-void calculate_hollow_cylinder_inertia_inverse(float result[3],float mass,float R,float r,float halfHeight,unsigned short upAxisIn0_2,const float comOffset[3])  {
+void calculate_hollow_cylinder_inertia_inverse(float result[3],float mass,float R,float r,float halfHeight,AxisEnum upAxis,const float comOffset[3])  {
     if (mass>0.f)   {
-        calculate_hollow_cylinder_inertia(result,mass,R,r,halfHeight,upAxisIn0_2,comOffset);
+        calculate_hollow_cylinder_inertia(result,mass,R,r,halfHeight,upAxis,comOffset);
         for (int i=0;i<3;i++) result[i] = 1.f/result[i];
     }
     else memset(result, 0, 3*sizeof(float));
 }
-/**
- * @brief calculate_torus_inertia
- * @param result
- * @param mass
- * @param majorRadius radius of the torus ( 0|-----------|--->R    | )
- * @param minorRadius radius of the circle ( 0|           |<---R    | )
- * @param upAxisIn0_2
- * @param comOffset
- */
-void calculate_torus_inertia(float result[3],float mass,float majorRadius,float minorRadius,unsigned short upAxisIn0_2,const float comOffset[3])  {
+void calculate_torus_inertia(float result[3], float mass, float majorRadius, float minorRadius, AxisEnum upAxis, const float comOffset[3])  {
+    // majorRadius radius of the torus  ( 0|-----------|--->R    | )
+    // minorRadius radius of the circle ( 0|           |<---R    | )
     if (mass>0.f)   {
         float a2 = minorRadius*minorRadius,  b2 = majorRadius*majorRadius;
-        assert(upAxisIn0_2<3);
         result[0] = result[1] = result[2] = 0.25f*mass*(4.f*b2+3*a2);
-        result[upAxisIn0_2] = 0.125f*mass*(5.f*a2+4.f*b2);
+        result[upAxis] = 0.125f*mass*(5.f*a2+4.f*b2);
         if (comOffset) {for (int l=0;l<3;l++)   result[l]+=mass*comOffset[l]*comOffset[l];} // hope it's correct
     }
     else memset(result, 0, 3*sizeof(float));
 }
-void calculate_torus_inertia_inverse(float result[3],float mass,float majorRadius,float minorRadius,unsigned short upAxisIn0_2,const float comOffset[3])  {
+void calculate_torus_inertia_inverse(float result[3], float mass, float majorRadius, float minorRadius, AxisEnum upAxis, const float comOffset[3])  {
     if (mass>0.f)   {
-        calculate_torus_inertia(result,mass,majorRadius,minorRadius,upAxisIn0_2,comOffset);
+        calculate_torus_inertia(result,mass,majorRadius,minorRadius,upAxis,comOffset);
         for (int i=0;i<3;i++) result[i] = 1.f/result[i];
     }
     else memset(result, 0, 3*sizeof(float));
 }
+void calculate_cone_inertia(float result[3], float mass, float radius, float halfHeight, AxisEnum upAxis, const float comOffset[3])  {
+    if (mass>0.f)   {
+        float radius2 = radius*radius,  h2 = halfHeight*halfHeight;
+        result[0] = result[1] = result[2] = mass*(3.f*radius2+2.f*h2)/20.f;
+        result[upAxis] = mass*3.f*radius2/10.f;
+        if (comOffset) {for (int l=0;l<3;l++)   result[l]+=mass*comOffset[l]*comOffset[l];} // hope it's correct
+    }
+    else memset(result, 0, 3*sizeof(float));
+}
+void calculate_cone_inertia_inverse(float result[3], float mass, float radius, float halfHeight, AxisEnum upAxis, const float comOffset[3])  {
+    if (mass>0.f)   {
+        calculate_cone_inertia(result,mass,radius,halfHeight,upAxis,comOffset);
+        for (int i=0;i<3;i++) result[i] = 1.f/result[i];
+    }
+    else memset(result, 0, 3*sizeof(float));
+}
+
 
 // main functions
 void show_info()  {
@@ -3225,9 +3565,9 @@ void restart_context(context_t* c) {
         filter->flags=0;
         filter->collision_group=COLLISION_GROUP_DEFAULT;
         filter->collision_mask=COLLISION_GROUP_ALL;
-#       if NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS>0
-        for (int ab=0;ab<NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS;ab++) info->aux_bodies[ab] = -1;
-#       endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS
+#       if NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES>0
+        for (int ab=0;ab<NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES;ab++) info->aux_bodies[ab] = -1;
+#       endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES
     }
 
     SimulationParams* sp = &c->simulation_params;
@@ -3639,8 +3979,13 @@ void finalize_removed_bodies(context_t* c) {
     for (int i=finalized_removed_bodies_count;i<removed_bodies_count;i++) {
         const body_type body = removed_bodies[i];
         BodyLayout* bl = &c->bodies.layouts[body];
-        bl->first_box_index=-1;bl->first_sphere_index=-1;// or 0?
+        bl->first_box_index=-1;bl->first_sphere_index=-1;
         bl->num_boxes=0;bl->num_spheres=0;
+        BodyInfo* info = &c->bodies.infos[body];    // reset some info data too
+        memset(&info->aabb_center[0],0,3*sizeof(float));
+        memset(&info->aabb_half_extents[0],0,3*sizeof(float));
+        memset(&info->com_offset[0],0,3*sizeof(float));
+        info->aabb_enlarged_radius=0.f;
     }
     c->global_data.finalized_removed_bodies_count=c->global_data.removed_bodies_count;
 
@@ -3852,6 +4197,8 @@ unsigned add_box(context_t* c,float mass, float hsizex, float hsizey, float hsiz
     //log("%d) Added box [mass:%1.3f;hsize{%1.3f,%1.3f,%1.3f};pos{%1.3f,%1.3f,%1.3f}]\n",body,mass,hsizex,hsizey,hsizez,T->position[0],T->position[1],T->position[2]);
     //assert(getBoxColliderId(c->bodies.count-1)==collider);
 
+    body_recalculate_bounding_box(c,body);  // new
+
     return body;
 }
 unsigned add_box(context_t* c,float mass, float hsizex, float hsizey, float hsizez, const float* mMatrix16WithoutScaling, const float comOffset[3]) {
@@ -3912,6 +4259,8 @@ unsigned add_sphere(context_t* c, float mass, float radius, const Transform* T, 
 
     filter->collision_group = COLLISION_GROUP_DEFAULT;filter->collision_mask = COLLISION_GROUP_ALL;
 
+    body_recalculate_bounding_box(c,body);  // new
+
     //log("%d) Added sphere [mass:%1.3f;radius=%1.3f;pos{%1.3f,%1.3f,%1.3f}]\n",body,mass,radius,T->position[0],T->position[1],T->position[2]);
     //assert(getSphereColliderId(c->bodies.count-1)==collider);
     return body;
@@ -3921,7 +4270,7 @@ unsigned add_sphere(context_t* c, float mass, float radius, const float* mMatrix
     else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_sphere(c,mass,radius,&T,comOffset);}
 }
 
-unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_boxes, const float* hsizeTriplets, const Transform* boxOffsetTransforms, unsigned num_spheres, const float* radii, const Transform* sphereOffsetTransforms, const Transform* T, const float comOffset[3])   {
+unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_boxes, const float* hsizeTriplets, const Transform* boxOffsetTransforms, unsigned num_spheres, const float* radii, const Transform* sphereOffsetTransforms, const Transform* T, const float comOffset[3],float* centerMeshAndRetrieveOldCenter3Out)   {
     unsigned body = NUDGE_INVALID_BODY_ID;
     assert(num_boxes+num_spheres>0);
     assert(c->colliders.boxes.count+num_boxes<=c->MAX_NUM_BOXES);
@@ -3957,13 +4306,6 @@ unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_b
     xform->body = body; // body id
     memset(&c->bodies.momentum[body], 0, sizeof(c->bodies.momentum[body])); // no velocity/angular velocity
     prop->mass_inverse = filter->flags&BF_IS_STATIC ? 0.f : (1.0f / mass);
-    memset(prop->inertia_inverse,0,3*sizeof(float));
-    if (filter->flags&BF_IS_DYNAMIC)    {
-        assert(inertia);
-        if (inertia) {for (int i=0;i<3;i++)   prop->inertia_inverse[i] = inertia[i]!=0.f ? (1.0f / inertia[i]) : 0.f;}
-        c->bodies.idle_counters[body] = 0;  // no idle
-    }
-    else c->bodies.idle_counters[body] = 0xff;   // idle
 
     for (unsigned i=0;i<num_boxes;i++)   {
         unsigned collider = c->colliders.boxes.count++;
@@ -3971,7 +4313,7 @@ unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_b
         Transform* xf = &c->colliders.boxes.transforms[collider];
         for (int j=0;j<3;j++) boxCollider->size[j] = hsizeTriplets[3*i+j];
         *xf = boxOffsetTransforms ? boxOffsetTransforms[i] : identity_transform;
-        if (comOffset) {for (int l=0;l<3;l++) {xf->position[l]-=comOffset[l];info->com_offset[l]=comOffset[l];}}
+        if (comOffset && !centerMeshAndRetrieveOldCenter3Out) {for (int l=0;l<3;l++) {xf->position[l]-=comOffset[l];info->com_offset[l]=comOffset[l];}}
         xf->body = body;
         if (i==0) layout->first_box_index = collider;
     }
@@ -3983,7 +4325,7 @@ unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_b
         Transform* xf = &c->colliders.spheres.transforms[collider];
         c->colliders.spheres.data[collider].radius = radii[i];
         *xf = sphereOffsetTransforms ? sphereOffsetTransforms[i] : identity_transform;
-        if (comOffset) {for (int l=0;l<3;l++) {xf->position[l]-=comOffset[l];info->com_offset[l]=comOffset[l];}}
+        if (comOffset && !centerMeshAndRetrieveOldCenter3Out) {for (int l=0;l<3;l++) {xf->position[l]-=comOffset[l];info->com_offset[l]=comOffset[l];}}
         xf->body = body;
         if (i==0) layout->first_sphere_index = collider;
     }
@@ -3991,11 +4333,53 @@ unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_b
 
     filter->collision_group = COLLISION_GROUP_DEFAULT;filter->collision_mask = COLLISION_GROUP_ALL;
 
+    body_recalculate_bounding_box(c,body);  // new get aabb
+
+    float aabb_he[3] = {info->aabb_half_extents[0],info->aabb_half_extents[1],info->aabb_half_extents[2]};
+    if (centerMeshAndRetrieveOldCenter3Out) {
+        centerMeshAndRetrieveOldCenter3Out[0]=info->aabb_center[0];
+        centerMeshAndRetrieveOldCenter3Out[1]=info->aabb_center[1];
+        centerMeshAndRetrieveOldCenter3Out[2]=info->aabb_center[2];
+        float offset[3]; // aabb_center + com_offset
+        // calculate total offset and correct info->aabb_min_max
+        for (int i=0;i<3;i++) {
+            offset[i]=centerMeshAndRetrieveOldCenter3Out[i]+(comOffset?comOffset[i]:0.f);
+            info->aabb_center[i]-=centerMeshAndRetrieveOldCenter3Out[i];
+        }
+        // remove offset from each collider transform and set info->com_offset to comOffset
+        for (unsigned i=0;i<layout->num_boxes;i++)   {
+            Transform* xf = &c->colliders.boxes.transforms[layout->first_box_index+i];
+            {for (int l=0;l<3;l++) {xf->position[l]-=offset[l];if (comOffset) info->com_offset[l]=comOffset[l];}}
+        }
+        for (unsigned i=0;i<layout->num_spheres;i++)   {
+            Transform* xf = &c->colliders.spheres.transforms[layout->first_sphere_index+i];
+            {for (int l=0;l<3;l++) {xf->position[l]-=offset[l];if (comOffset) info->com_offset[l]=comOffset[l];}}
+        }
+        // recalculate info->aabb_enlarged_radius
+        info->aabb_enlarged_radius = 0;
+        const float* t = info->aabb_half_extents;float s = t[0]*t[0] + t[1]*t[1] + t[2]*t[2];if (s>NM_EPSILON) info->aabb_enlarged_radius+=sqrtf(s);
+        t = info->aabb_center;s = t[0]*t[0] + t[1]*t[1] + t[2]*t[2];if (s>NM_EPSILON) info->aabb_enlarged_radius+=sqrtf(s);
+    }
+
+    memset(prop->inertia_inverse,0,3*sizeof(float));
+    if (filter->flags&BF_IS_DYNAMIC)    {
+        float tmp[3];
+        if (!inertia) {
+            // now that we can calculate a per-body aabb, we can assign a box inertia as default
+            calculate_box_inertia(tmp,mass,aabb_he[0],aabb_he[1],aabb_he[2],comOffset); // here we simply use comOffset (not the additional offset to recenter the mesh): is this the default option? Yes: comOffset should not depend on the input mesh aabb center
+            inertia=tmp;
+        }
+        assert(inertia);
+        if (inertia) {for (int i=0;i<3;i++)   prop->inertia_inverse[i] = inertia[i]!=0.f ? (1.0f / inertia[i]) : 0.f;}
+        c->bodies.idle_counters[body] = 0;  // no idle
+    }
+    else c->bodies.idle_counters[body] = 0xff;   // idle
+
     //log("%d) Added compound [mass:%1.3f;pos{%1.3f,%1.3f,%1.3f};num_boxes=%u;num_spheres=%u]\n",body,mass,T->position[0],T->position[1],T->position[2],num_boxes,num_spheres);
 
     return body;
 }
-unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_boxes, const float* hsizeTriplets, const float* boxOffsetMatrices16WithoutScaling, unsigned num_spheres, const float* radii, const float* sphereOffsetMatrices16WithoutScaling, const float* mMatrix16WithoutScaling, const float comOffset[3])   {
+unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_boxes, const float* hsizeTriplets, const float* boxOffsetMatrices16WithoutScaling, unsigned num_spheres, const float* radii, const float* sphereOffsetMatrices16WithoutScaling, const float* mMatrix16WithoutScaling, const float comOffset[3], float *centerMeshAndRetrieveOldCenter3Out)   {
     Arena arena = c->arena;
     Transform* boxTransforms = allocate_array<Transform>(&arena, num_boxes+num_spheres, 32);
     Transform* sphereTransforms = &boxTransforms[num_boxes];
@@ -4003,11 +4387,388 @@ unsigned add_compound(context_t* c, float mass, float inertia[3], unsigned num_b
     for (unsigned i=0;i<num_spheres;i++)    Mat4WithoutScalingToTransform(&sphereTransforms[i],&sphereOffsetMatrices16WithoutScaling[16*i]);
     Transform T = identity_transform;
     if (mMatrix16WithoutScaling) Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);
-    return add_compound(c,mass,inertia,num_boxes,hsizeTriplets,boxTransforms,num_spheres,radii,sphereTransforms,&T,comOffset);
+    return add_compound(c,mass,inertia,num_boxes,hsizeTriplets,boxTransforms,num_spheres,radii,sphereTransforms,&T,comOffset,centerMeshAndRetrieveOldCenter3Out);
 }
+
+namespace extra {
+
+#ifndef NUDGE_EXTRA_RADIUS_ON_BOX_SHRINK
+#   define  NUDGE_EXTRA_RADIUS_ON_BOX_SHRINK (1.f/3.5f)
+#endif
+
+unsigned add_compound_prism(context_t* c, float mass, float radius, float hsize, unsigned num_lateral_faces, const Transform* T, AxisEnum axis, const float comOffset[3])  {
+    if (num_lateral_faces==0) num_lateral_faces=8;
+    if (num_lateral_faces<4) return NUDGE_INVALID_BODY_ID;
+    if (num_lateral_faces==4) return add_box(c,mass,axis==AXIS_X?hsize:radius,axis==AXIS_Y?hsize:radius,axis==AXIS_Z?hsize:radius,T,comOffset);
+    const int use_half_number_of_boxes = ((num_lateral_faces%2)==0);
+    if (!use_half_number_of_boxes)  return add_compound_hollow_cylinder(c,mass,0.f,radius,hsize,T,axis,num_lateral_faces,comOffset);
+    const unsigned num_boxes = num_lateral_faces/2;
+    Arena arena = c->arena;assert(arena.size>num_boxes*(3*sizeof(float)+sizeof(Transform))+64);
+    const float axisv[3] = {(axis==AXIS_X)?1.f:0.f,(axis==AXIS_Y)?1.f:0.f,(axis==AXIS_Z)?1.f:0.f};
+    float* box_hsizes = NULL;Transform* boxT=NULL;
+    const float hsz = radius*tanf(M_PI/(float)num_lateral_faces);
+    const float hln = radius;
+    int axisi[3] = {0,1,2};
+    if (axis==AXIS_X) {axisi[0]=2;axisi[1]=0;axisi[2]=1;}
+    else if (axis==AXIS_Z) {axisi[0]=1;axisi[1]=2;axisi[2]=0;}
+    box_hsizes = allocate_array<float>(&arena, num_boxes*3, 32);
+    boxT = allocate_array<Transform>(&arena, num_boxes, 32);
+    for (unsigned i=0;i<num_boxes;i++) {
+        float* hs = &box_hsizes[3*i];Transform* t = &boxT[i];*t=identity_transform;
+        const float angle = (float)i*M_PI/(float)num_boxes;
+        nm_QuatFromAngleAxis(t->q,-angle,axisv[0],axisv[1],axisv[2]);
+        hs[axisi[0]]=hln;hs[axisi[1]]=hsize;hs[axisi[2]]=hsz;
+    }
+    float inertia[3]; calculate_cylinder_inertia(inertia,mass,radius,hsize,axis,comOffset);float stripped_center[3];
+    return add_compound(c,mass,inertia,num_boxes,box_hsizes,boxT,0,NULL,NULL,T,comOffset,stripped_center);
+}
+
+unsigned add_compound_cylinder(context_t* c,float mass,float radius,float hsize, const Transform* T,AxisEnum axis,unsigned num_boxes,unsigned num_spheres,const float comOffset[3],float box_lateral_side_shrinking)  {
+    const bool is_short_cylinder = (radius>=hsize);
+    if (num_boxes==0 && num_spheres==0) {
+        if (is_short_cylinder) {num_boxes=8;num_spheres=0;}
+        else {num_boxes=1;num_spheres=3;}
+    }
+    if (is_short_cylinder) num_spheres = 0;
+    if (box_lateral_side_shrinking<0.f) {
+        if (num_spheres==0) box_lateral_side_shrinking=(num_boxes<=1)?0.f:(1.f-1.f/1.41f);
+        else box_lateral_side_shrinking=NUDGE_EXTRA_RADIUS_ON_BOX_SHRINK;
+    }
+    Arena arena = c->arena;assert(arena.size>num_boxes*(3*sizeof(float)+sizeof(Transform))+num_spheres*(1*sizeof(float)+sizeof(Transform))+128);
+    const float axisv[3] = {(axis==AXIS_X)?1.f:0.f,(axis==AXIS_Y)?1.f:0.f,(axis==AXIS_Z)?1.f:0.f};
+    float* box_hsizes = NULL;Transform* boxT=NULL;
+    if (num_boxes>0) {
+        const float offset = radius*box_lateral_side_shrinking;    // box sides is radius-offset
+        const float box_size = radius-offset;
+        float angle = M_PI*0.5f/num_boxes;
+        box_hsizes = allocate_array<float>(&arena, num_boxes*3, 32);
+        boxT = allocate_array<Transform>(&arena, num_boxes, 32);
+        for (unsigned i=0;i<num_boxes;i++) {
+            float* hs = &box_hsizes[3*i];Transform* t = &boxT[i];*t=identity_transform;
+            hs[0]=hs[1]=hs[2]=box_size;hs[axis]=hsize;
+            nm_QuatFromAngleAxis(t->q,angle*i,axisv[0],axisv[1],axisv[2]);
+        }
+    }
+    float* sphere_radii = NULL;Transform* sphereT = NULL;
+    if (num_spheres>0)  {
+        sphere_radii = allocate_array<float>(&arena, num_boxes*1, 32);
+        sphereT = allocate_array<Transform>(&arena, num_boxes, 32);
+        for (unsigned i=0;i<num_spheres;i++) {sphere_radii[i]=radius;sphereT[i]=identity_transform;}
+        if (num_spheres>=2) {
+            Transform* t = &sphereT[0];t->p[axis]=-hsize+radius;
+            t = &sphereT[1];t->p[axis]=hsize-radius;
+            if (num_spheres>2) {
+                // |---------------|----------------| // 1 => 1/2
+                // |---------|           |----------| // 2 => 1/3
+                // |-------|-------|--------|-------| // 3 => 1/4
+                const float dist = (2.f*hsize)/(float)(num_spheres+1);
+                for (unsigned i=2;i<num_spheres;i++) {sphereT[i].p[axis]=-hsize+dist*i;}
+            }
+        }
+        /*else if (mass==0) {
+            assert(num_spheres==1);
+            sphereT[i].p[axis]=-hsize+radius; // if it's static maybe we prefer a single sphere at the bottom?
+        }*/
+    }
+    float inertia[3]; calculate_cylinder_inertia(inertia,mass,radius,hsize,axis,comOffset);float stripped_center[3];
+    return add_compound(c,mass,inertia,num_boxes,box_hsizes,boxT,num_spheres,sphere_radii,sphereT,T,comOffset,stripped_center);
+}
+unsigned add_compound_capsule(context_t* c, float mass, float radius, float hsize, const Transform* T, AxisEnum axis, unsigned num_boxes, unsigned num_spheres, const float comOffset[3], float box_lateral_side_shrinking)    {
+    if (num_boxes==0 && num_spheres==0) {num_boxes=1;num_spheres=3;}
+    assert(num_spheres>=2);
+    if (box_lateral_side_shrinking<0.f) box_lateral_side_shrinking=NUDGE_EXTRA_RADIUS_ON_BOX_SHRINK;
+    Arena arena = c->arena;assert(arena.size>num_boxes*(3*sizeof(float)+sizeof(Transform))+num_spheres*(1*sizeof(float)+sizeof(Transform))+128);
+    const float axisv[3] = {(axis==AXIS_X)?1.f:0.f,(axis==AXIS_Y)?1.f:0.f,(axis==AXIS_Z)?1.f:0.f};
+    float* box_hsizes = NULL;Transform* boxT=NULL;
+    if (num_boxes>0) {
+        const float offset = radius*box_lateral_side_shrinking;    // box sides is radius-offset
+        float angle = M_PI*0.5f/num_boxes;
+        box_hsizes = allocate_array<float>(&arena, num_boxes*3, 32);
+        boxT = allocate_array<Transform>(&arena, num_boxes, 32);
+        for (unsigned i=0;i<num_boxes;i++) {
+            float* hs = &box_hsizes[3*i];Transform* t = &boxT[i];*t=identity_transform;
+            hs[0]=hs[1]=hs[2]=radius-offset;hs[axis]=hsize;
+            nm_QuatFromAngleAxis(t->q,angle*i,axisv[0],axisv[1],axisv[2]);
+        }
+    }
+    float* sphere_radii = NULL;Transform* sphereT = NULL;
+    if (num_spheres>0)  {
+        sphere_radii = allocate_array<float>(&arena, num_boxes*1, 32);
+        sphereT = allocate_array<Transform>(&arena, num_boxes, 32);
+        for (unsigned i=0;i<num_spheres;i++) {sphere_radii[i]=radius;sphereT[i]=identity_transform;}
+        Transform* t = &sphereT[0];t->p[axis]=-hsize;
+        t = &sphereT[1];t->p[axis]=hsize;
+        if (num_spheres>2) {
+            // |---------------|----------------| // 1 => 1/2
+            // |---------|           |----------| // 2 => 1/3
+            // |-------|-------|--------|-------| // 3 => 1/4
+            const float dist = (2.f*(hsize+radius))/(float)(num_spheres+1);
+            for (unsigned i=2;i<num_spheres;i++) {sphereT[i].p[axis]=-hsize-radius+dist*i;}
+        }
+    }
+    float inertia[3]; calculate_capsule_inertia(inertia,mass,radius,hsize,axis,comOffset);float stripped_center[3];
+    return add_compound(c,mass,inertia,num_boxes,box_hsizes,boxT,num_spheres,sphere_radii,sphereT,T,comOffset,stripped_center);
+}
+unsigned add_compound_hollow_cylinder(context_t* c,float mass,float min_radius,float max_radius,float hsize, const Transform* T,AxisEnum axis,unsigned num_boxes,const float comOffset[3])  {
+    const unsigned num_spheres = 0;assert(min_radius<max_radius);
+    const float radius = (max_radius+min_radius)*0.5f,inner_radius=(max_radius-min_radius)*0.5f;
+    Arena arena = c->arena;assert(arena.size>num_boxes*(3*sizeof(float)+sizeof(Transform))+num_spheres*(1*sizeof(float)+sizeof(Transform))+128);
+    const float axisv[3] = {(axis==AXIS_X)?1.f:0.f,(axis==AXIS_Y)?1.f:0.f,(axis==AXIS_Z)?1.f:0.f};
+    int axisi[3] = {0,1,2};
+    if (axis==AXIS_X) {axisi[0]=2;axisi[1]=0;axisi[2]=1;}
+    else if (axis==AXIS_Z) {axisi[0]=1;axisi[1]=2;axisi[2]=0;}
+    float* box_hsizes = NULL;Transform* boxT=NULL;
+    if (num_boxes==0) num_boxes=8;
+    if (num_boxes>0) {
+        const float box_length = max_radius*tanf(M_PI/(float)num_boxes);
+        box_hsizes = allocate_array<float>(&arena, num_boxes*3, 32);
+        boxT = allocate_array<Transform>(&arena, num_boxes, 32);
+        for (unsigned i=0;i<num_boxes;i++) {
+            float* hs = &box_hsizes[3*i];Transform* t = &boxT[i];*t=identity_transform;
+            hs[axisi[0]]=box_length;hs[axisi[1]]=hsize;hs[axisi[2]]=inner_radius;
+            const float angle = (float)i*2.f*M_PI/(float)num_boxes;
+            const float sinAngle = sinf(angle), cosAngle = cosf(angle);
+            nm_QuatFromAngleAxis(t->q,-angle,axisv[0],axisv[1],axisv[2]);
+            t->p[axisi[0]]=(radius)*sinAngle;t->p[axisi[1]]=0.f;t->p[axisi[2]]=-(radius)*cosAngle;
+        }
+    }
+    float* sphere_radii = NULL;Transform* sphereT = NULL;
+    /*if (num_spheres>0)  {
+        sphere_radii = allocate_array<float>(&arena, num_boxes*1, 32);
+        sphereT = allocate_array<Transform>(&arena, num_boxes, 32);
+        for (unsigned i=0;i<num_spheres;i++) {sphere_radii[i]=radius;sphereT[i]=identity_transform;}
+        if (num_spheres>=2) {
+            Transform* t = &sphereT[0];t->p[axis]=-hsize+radius;
+            t = &sphereT[1];t->p[axis]=hsize-radius;
+            if (num_spheres>2) {
+                // |---------------|----------------| // 1 => 1/2
+                // |---------|           |----------| // 2 => 1/3
+                // |-------|-------|--------|-------| // 3 => 1/4
+                const float dist = (2.f*hsize)/(float)(num_spheres+1);
+                for (unsigned i=2;i<num_spheres;i++) {sphereT[i].p[axis]=-hsize+dist*i;}
+            }
+        }
+    }*/
+    float inertia[3]; calculate_hollow_cylinder_inertia(inertia,mass,max_radius,min_radius,hsize,axis,comOffset);float stripped_center[3];
+    return add_compound(c,mass,inertia,num_boxes,box_hsizes,boxT,num_spheres,sphere_radii,sphereT,T,comOffset,stripped_center);
+}
+unsigned add_compound_torus(context_t* c,float mass,float radius,float inner_radius, const Transform* T,AxisEnum axis,unsigned num_boxes,const float comOffset[3])   {
+    const unsigned num_spheres = 0;assert(inner_radius<=radius);
+    Arena arena = c->arena;assert(arena.size>num_boxes*(3*sizeof(float)+sizeof(Transform))+num_spheres*(1*sizeof(float)+sizeof(Transform))+128);
+    const float axisv[3] = {(axis==AXIS_X)?1.f:0.f,(axis==AXIS_Y)?1.f:0.f,(axis==AXIS_Z)?1.f:0.f};
+    int axisi[3] = {0,1,2};
+    if (axis==AXIS_X) {axisi[0]=2;axisi[1]=0;axisi[2]=1;}
+    else if (axis==AXIS_Z) {axisi[0]=1;axisi[1]=2;axisi[2]=0;}
+    float* box_hsizes = NULL;Transform* boxT=NULL;
+    if (num_boxes==0) num_boxes=8;
+    if (num_boxes>0) {
+        const float box_length = (radius+inner_radius)*tanf(M_PI/(float)num_boxes);
+        box_hsizes = allocate_array<float>(&arena, num_boxes*3, 32);
+        boxT = allocate_array<Transform>(&arena, num_boxes, 32);
+        for (unsigned i=0;i<num_boxes;i++) {
+            float* hs = &box_hsizes[3*i];Transform* t = &boxT[i];*t=identity_transform;
+            hs[axisi[0]]=box_length;hs[axisi[1]]=inner_radius;hs[axisi[2]]=inner_radius;
+            const float angle = (float)i*2.f*M_PI/(float)num_boxes;
+            const float sinAngle = sinf(angle), cosAngle = cosf(angle);
+            nm_QuatFromAngleAxis(t->q,-angle,axisv[0],axisv[1],axisv[2]);
+            t->p[axisi[0]]=(radius)*sinAngle;t->p[axisi[1]]=0.f;t->p[axisi[2]]=-(radius)*cosAngle;
+        }
+    }
+    float* sphere_radii = NULL;Transform* sphereT = NULL;
+    /*if (num_spheres>0)  {
+        sphere_radii = allocate_array<float>(&arena, num_boxes*1, 32);
+        sphereT = allocate_array<Transform>(&arena, num_boxes, 32);
+        for (unsigned i=0;i<num_spheres;i++) {sphere_radii[i]=radius;sphereT[i]=identity_transform;}
+        if (num_spheres>=2) {
+            Transform* t = &sphereT[0];t->p[axis]=-hsize+radius;
+            t = &sphereT[1];t->p[axis]=hsize-radius;
+            if (num_spheres>2) {
+                // |---------------|----------------| // 1 => 1/2
+                // |---------|           |----------| // 2 => 1/3
+                // |-------|-------|--------|-------| // 3 => 1/4
+                const float dist = (2.f*hsize)/(float)(num_spheres+1);
+                for (unsigned i=2;i<num_spheres;i++) {sphereT[i].p[axis]=-hsize+dist*i;}
+            }
+        }
+    }*/
+    float inertia[3]; calculate_torus_inertia(inertia,mass,radius,inner_radius,axis,comOffset);float stripped_center[3];
+    return add_compound(c,mass,inertia,num_boxes,box_hsizes,boxT,num_spheres,sphere_radii,sphereT,T,comOffset,stripped_center);
+}
+unsigned add_compound_cone(context_t* c, float mass, float radius, float hheight, const Transform* T, AxisEnum axis, unsigned num_boxes, unsigned num_spheres, const float comOffset[3])    {
+    if (num_boxes==0) num_boxes=4;
+    if (num_spheres==0) num_spheres=3;
+    Arena arena = c->arena;assert(arena.size>num_boxes*(3*sizeof(float)+sizeof(Transform))+num_spheres*(1*sizeof(float)+sizeof(Transform))+128);
+    const float axisv[3] = {(axis==AXIS_X)?1.f:0.f,(axis==AXIS_Y)?1.f:0.f,(axis==AXIS_Z)?1.f:0.f};
+    const float R=radius,HH=hheight,H=hheight*2.f,theta=atanf(R/H);//,phi=M_PI*0.5f-theta;
+    float* box_hsizes = NULL;Transform* boxT=NULL;
+    if (num_boxes>0) {
+        box_hsizes = allocate_array<float>(&arena, num_boxes*3, 32);
+        boxT = allocate_array<Transform>(&arena, num_boxes, 32);for (unsigned i=0;i<num_boxes;i++) boxT[i]=identity_transform;
+        if (num_boxes>0) {
+            unsigned num_group_boxes[4] = {};
+            if (num_boxes>3) num_group_boxes[3]=1;
+            if (num_boxes>5) {num_group_boxes[1]=2;}
+            else if (num_boxes>4) {num_group_boxes[1]=1;}
+            if (num_spheres>=3 && num_group_boxes[1]==1) {num_group_boxes[3]=0;num_group_boxes[1]=2;}
+            num_group_boxes[0]=num_boxes-num_group_boxes[1]-num_group_boxes[2]-num_group_boxes[3];
+            //log("%u+%u+%u+%u=%u\n",num_group_boxes[0],num_group_boxes[1],num_group_boxes[2],num_group_boxes[3],num_boxes);
+            const float h_fracs[4]={0.1f,0.2f,0.7f,0.85f};
+            unsigned num_box_offset=0;
+            for (unsigned j=0;j<4;j++) {
+                const unsigned group_boxes = num_group_boxes[j];if (group_boxes==0) continue;;
+                const float dh = h_fracs[j]*HH,dr = R*(HH-dh)/(HH*1.41f);
+                float angle = M_PI*0.5f/group_boxes, angle_offset=M_PI*0.25f*j;
+                for (unsigned i=0;i<group_boxes;i++) {
+                    float* hs = &box_hsizes[3*(i+num_box_offset)];Transform* t = &boxT[i+num_box_offset];*t=identity_transform;
+                    t->p[axis]=-HH+dh;
+                    hs[0]=hs[1]=hs[2]=dr;hs[axis]=dh;
+                    nm_QuatFromAngleAxis(t->q,angle_offset+angle*i,axisv[0],axisv[1],axisv[2]);
+                }
+                num_box_offset+=group_boxes;
+            }
+        }
+    }
+    float* sphere_radii = NULL;Transform* sphereT = NULL;
+    if (num_spheres>0)  {
+        sphere_radii = allocate_array<float>(&arena, num_spheres*1, 32);
+        sphereT = allocate_array<Transform>(&arena, num_spheres, 32);
+        for (unsigned i=0;i<num_spheres;i++) sphereT[i]=identity_transform;
+        const float sin_theta = sinf(theta);
+        const float r = H*sin_theta/(sin_theta+1);sphere_radii[0]=r;sphereT[0].p[axis]=-HH+r;    // bigger sphere
+        if (num_spheres>1)  {
+            const unsigned remaining_spheres = num_spheres-1;
+            const float min_rad=0.2f*r;
+            const float max_rad=num_spheres<=3?0.45f*r:(num_spheres>=6?0.85f*r:(0.45f*r+((0.85f*r-0.45f*r)*(num_spheres-3))/2));
+            for (unsigned i=0;i<remaining_spheres;i++) {
+                const float rtop = remaining_spheres==1?min_rad:(min_rad+((max_rad-min_rad)*i)/(remaining_spheres-1));//0.65f*r-0.2f*r*((float)(i+1)/(float)remaining_spheres);
+                sphere_radii[i+1]=rtop;
+                sphereT[i+1].p[axis]=HH-rtop/sinf(theta);
+            }
+        }
+    }
+    float inertia[3]; calculate_cone_inertia(inertia,mass,radius,hheight,axis,comOffset);float stripped_center[3];
+    return add_compound(c,mass,inertia,num_boxes,box_hsizes,boxT,num_spheres,sphere_radii,sphereT,T,comOffset,stripped_center);
+}
+unsigned add_compound_prism(context_t* c, float mass, float radius, float hsize, unsigned num_lateral_faces, const float* mMatrix16WithoutScaling, AxisEnum axis, const float comOffset[3]) {
+    if (!mMatrix16WithoutScaling)   return add_compound_prism(c,mass,radius,hsize,num_lateral_faces,(const Transform*)NULL);
+    else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_compound_prism(c,mass,radius,hsize,num_lateral_faces,&T,axis,comOffset);}
+}
+unsigned add_compound_cylinder(context_t* c, float mass, float radius, float hsize, const float* mMatrix16WithoutScaling, AxisEnum axis, unsigned num_boxes, unsigned num_spheres, const float comOffset[3], float box_lateral_side_shrinking) {
+    if (!mMatrix16WithoutScaling)   return add_compound_cylinder(c,mass,radius,hsize,(const Transform*)NULL);
+    else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_compound_cylinder(c,mass,radius,hsize,&T,axis,num_boxes,num_spheres,comOffset,box_lateral_side_shrinking);}
+}
+unsigned add_compound_capsule(context_t* c, float mass, float radius, float hsize, const float* mMatrix16WithoutScaling, AxisEnum axis, unsigned num_boxes, unsigned num_spheres, const float comOffset[3], float box_lateral_side_shrinking)    {
+    if (!mMatrix16WithoutScaling)   return add_compound_capsule(c,mass,radius,hsize,(const Transform*)NULL);
+    else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_compound_capsule(c,mass,radius,hsize,&T,axis,num_boxes,num_spheres,comOffset,box_lateral_side_shrinking);}
+}
+unsigned add_compound_hollow_cylinder(context_t* c,float mass,float min_radius,float max_radius,float hsize,const float* mMatrix16WithoutScaling,AxisEnum axis,unsigned num_boxes,const float comOffset[3])    {
+    if (!mMatrix16WithoutScaling)   return add_compound_hollow_cylinder(c,mass,min_radius,max_radius,hsize,(const Transform*)NULL);
+    else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_compound_hollow_cylinder(c,mass,min_radius,max_radius,hsize,&T,axis,num_boxes,comOffset);}
+}
+unsigned add_compound_torus(context_t* c,float mass,float radius,float inner_radius, const float* mMatrix16WithoutScaling,AxisEnum axis,unsigned num_boxes,const float comOffset[3]) {
+    if (!mMatrix16WithoutScaling)   return add_compound_torus(c,mass,radius,inner_radius,(const Transform*)NULL);
+    else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_compound_torus(c,mass,radius,inner_radius,&T,axis,num_boxes,comOffset);}
+}
+unsigned add_compound_cone(context_t* c, float mass, float radius, float hheight, const float* mMatrix16WithoutScaling, AxisEnum axis, unsigned num_boxes, unsigned num_spheres, const float comOffset[3])    {
+    if (!mMatrix16WithoutScaling)   return add_compound_cone(c,mass,radius,hheight,(const Transform*)NULL);
+    else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_compound_cone(c,mass,radius,hheight,&T,axis,num_boxes,num_spheres,comOffset);}
+}
+
+
+
+} // namespace extra
 // ------------
+void body_recalculate_bounding_box(context_t* c,uint32_t body) {
+    assert(c && body<c->bodies.count);
+    float aabb_min[3]={0,0,0},aabb_max[3]={0,0,0};
+    const BodyLayout* L = &c->bodies.layouts[body];
+    if (L->num_spheres>0) {
+        assert(L->first_sphere_index>=0 && (uint16_t)L->first_sphere_index+L->num_spheres<=c->colliders.spheres.count);
+        const SphereCollider* S = &c->colliders.spheres.data[L->first_sphere_index];
+        const Transform* T = &c->colliders.spheres.transforms[L->first_sphere_index];
+        for (int i=0;i<3;i++) {aabb_min[i]=T[0].p[i]-S[0].radius;aabb_max[i]=T[0].p[i]+S[0].radius;} // assign first aabb_min_max
+        // process the remaining spheres and enlarge aabb_min_max
+        for (int j=1;j<L->num_spheres;j++) {
+            const Transform* t = &T[j];const float r = S[j].radius;
+            for (int i=0;i<3;i++) {
+                if (aabb_min[i]>t->p[i]-r)      aabb_min[i]=t->p[i]-r;
+                else if (aabb_max[i]<t->p[i]+r) aabb_max[i]=t->p[i]+r;
+            }
+        }
+    }
+    if (L->num_boxes>0) {
+        assert(L->first_box_index>=0 && (uint16_t)L->first_box_index+L->num_boxes<=c->colliders.boxes.count);
+        const BoxCollider* B = &c->colliders.boxes.data[L->first_box_index];
+        const Transform* T = &c->colliders.boxes.transforms[L->first_box_index];
+        for (int j=0;j<L->num_boxes;j++) {
+            const float* hs = &B[j].size[0];const Transform* t = &T[j];
+            if (t->q[0]==0.f && t->q[1]==0.f && t->q[2]==0.f && t->q[3]==1.f) {
+                // fast code path
+                if (j==0 && L->num_spheres==0) {
+                    for (int i=0;i<3;i++) {aabb_min[i]=t->p[i]-hs[i];aabb_max[i]=t->p[i]+hs[i];} // assign first aabb_min_max
+                    continue;
+                }
+                // enlarge aabb_min_max with t and hs
+                for (int i=0;i<3;i++) {
+                    if (aabb_min[i]>t->p[i]-hs[i])      aabb_min[i]=t->p[i]-hs[i];
+                    else if (aabb_max[i]<t->p[i]+hs[i]) aabb_max[i]=t->p[i]+hs[i];
+                }
+                continue;
+            }
+            else {
+                // slow code path
+                float m[9];nm_Mat3FromQuat(m,t->q); // rotation matrix of t->q
+                // calculate result based on m[9], t->p[] and hs[]
+                for (int i=0;i<3;i++)   {
+                    float vmin,vmax;    // min and max of the (i) component of the aabb of the j-th box
+                    const float hd=fabsf(m[i]*hs[0])+fabsf(m[3+i]*hs[1])+fabsf(m[6+i]*hs[2]);
+                    vmin = vmax = t->p[i]; vmin-= hd;vmax+= hd;
+                    if (j==0 && L->num_spheres==0) {
+                        aabb_min[i]=vmin;aabb_max[i]=vmax; // assign first aabb_min_max
+                        continue;
+                    }
+                    // enlarge (aabb_min_max) with vmin and vmax
+                    if (aabb_min[i]>vmin)      aabb_min[i]=vmin;
+                    else if (aabb_max[i]<vmax) aabb_max[i]=vmax;
+                }
+            }
+        }
+    }
+    // convert  aabb_min/aabb_max to aabb_center/aabb_extents
+    const int stripComOffset=0;
+    BodyInfo* info = &c->bodies.infos[body];
+    for (int i=0;i<3;i++) {
+        info->aabb_center[i]= (aabb_max[i]+aabb_min[i])*0.5f;
+        info->aabb_half_extents[i]=(aabb_max[i]-aabb_min[i])*0.5f;
+        if (stripComOffset)  info->aabb_center[i]+=info->com_offset[i];
+    }
+    // calculate info->aabb_enlarged_radius
+    info->aabb_enlarged_radius = 0;
+    const float* t = info->aabb_half_extents;float s = t[0]*t[0] + t[1]*t[1] + t[2]*t[2];if (s>NM_EPSILON) info->aabb_enlarged_radius+=sqrtf(s);
+    t = info->aabb_center;s = t[0]*t[0] + t[1]*t[1] + t[2]*t[2];if (s>NM_EPSILON) info->aabb_enlarged_radius+=sqrtf(s);
+}
 
 
+void body_change_motion_state(nudge::context_t* c,unsigned body,nudge::FlagMask new_motion_state,float mass_fallback)  {
+    using namespace nudge;assert(c && body<c->bodies.count);
+    new_motion_state&=BF_IS_STATIC_OR_KINEMATIC_OR_DYNAMIC;assert(new_motion_state);    // wrong input argument
+    BodyFilter* bf = &c->bodies.filters[body];if (bf->flags&new_motion_state) return;
+    BodyProperties* bp = &c->bodies.properties[body];BodyMomentum* bm = &c->bodies.momentum[body];
+    if (new_motion_state&BF_IS_DYNAMIC) {
+        if (bp->mass_inverse!=0) {if (bp->mass_inverse<0) {bp->mass_inverse=-bp->mass_inverse;mass_fallback = 1.f/bp->mass_inverse;}}
+        else {assert(mass_fallback!=0.f);if (mass_fallback<0.f) mass_fallback=-mass_fallback;bp->mass_inverse=1.f/mass_fallback;}
+        if (bp->inertia_inverse[0]==0.f && bp->inertia_inverse[1]==0.f && bp->inertia_inverse[2]==0.f) {BodyInfo* bi = &c->bodies.infos[body];float* he=bi->aabb_half_extents;calculate_box_inertia_inverse(bp->inertia_inverse,mass_fallback,he[0],he[1],he[2],bi->com_offset);}
+        else {for (int k=0;k<3;k++) {if (bp->inertia_inverse[k]<0.f) bp->inertia_inverse[k]=-bp->inertia_inverse[k];}}
+    }
+    else {
+        // we do this for (new_motion_state&BF_IS_STATIC_OR_KINEMATIC)
+        if (bp->mass_inverse>0) bp->mass_inverse=-bp->mass_inverse;
+        for (int k=0;k<3;k++) {if (bp->inertia_inverse[k]>0.f) bp->inertia_inverse[k]=-bp->inertia_inverse[k];}
+    }
+    memset(bm->velocity,0,3*sizeof(bm->velocity));memset(bm->angular_velocity,0,3*sizeof(bm->angular_velocity));
+    bf->flags&=~BF_IS_STATIC_OR_KINEMATIC_OR_DYNAMIC;bf->flags|=new_motion_state;
+    c->bodies.idle_counters[body]=(new_motion_state&BF_IS_DYNAMIC)?0:0xFF; // wake up or put to sleep
+}
 
 static void simulate_kinematic_animations(context_t* c,float timeStep)  {
     // This code is too long... can we compress it better?
@@ -4030,9 +4791,9 @@ static void simulate_kinematic_animations(context_t* c,float timeStep)  {
             }
             continue;
         }
-        const float absSpeed = ka->speed<0 ? -ka->speed : ka->speed;
-        if (ka->playing && absSpeed!=0
-                && ka->body<c->bodies.count && flags&BF_IS_KINEMATIC
+        const float absSpeed = fabsf(ka->speed); //ka->speed<0 ? -ka->speed : ka->speed;
+        if (ka->playing && absSpeed!=0 && ka->body<c->bodies.count
+                && flags&BF_IS_KINEMATIC
                 ) {
             const float deltaTime = timeStep;
             Transform T = identity_transform;
@@ -4187,7 +4948,7 @@ float* calculate_graphic_transform_for_body(context_t* c,unsigned body,float* pM
 
     // we must convert the physic Transform Tn to the graphic mMatrix (16 floats) used for rendering
     if (pModelMatrix16Out) TransformToMat4(pModelMatrix16Out,&Tn);
-    // graphic transform (md->mMatrix) must be updated if the body has a COM offset
+    // graphic transform (pModelMatrix16Out) must be updated if the body has a COM offset
     if ((flags&BF_HAS_COM_OFFSET))   {
         // comOffset must be subtracted
         const float* comOffset = c->bodies.infos[T->body].com_offset;
@@ -4356,10 +5117,9 @@ void simulate(context_t* c,float timeStep, unsigned numSubSteps, unsigned numIte
                 }
                 if (flags&BF_NEVER_SLEEPING) c->bodies.idle_counters[index]=0;   // prevents sleeping
 
-#               if NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS>0
-                BodyInfo* info = &c->bodies.infos[index];
-                for (int ab=0;ab<NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS;ab++) info->aux_bodies[ab] = -1;
-#               endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODYS
+#               if NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES>0
+                memset(&c->bodies.infos[index].aux_bodies,0xFF,NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES*sizeof(int16_t));    // sets all components to -1
+#               endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES
             }
         }
 
@@ -4407,8 +5167,12 @@ void save_context(FILE* f,const context_t* c)   {
     fprintf(f,"MAX_NUM_SPHERES:\n%u\n",c->MAX_NUM_SPHERES);
     // c->bodies
     const BodyData* bd = &c->bodies;
+    uint32_t size_of_BodyInfo_user = 0;
+#   ifndef NUDGE_BODYINFO_STRUCT_NO_USER_DATA
+    size_of_BodyInfo_user = (uint32_t) sizeof(BodyInfo::user);
+#   endif
     fprintf(f,"BodyData:\ncount: %u\nsizeof(BodyData): %u\nsizeof(Transform): %u\nsizeof(BodyProperties): %u\nsizeof(BodyMomentum): %u\n"
-              "sizeof(BodyFilter): %u\nsizeof(BodyInfo): %u\n",bd->count,(uint32_t)sizeof(BodyData),(uint32_t)sizeof(Transform),(uint32_t)sizeof(BodyProperties),(uint32_t)sizeof(BodyMomentum),(uint32_t)sizeof(BodyFilter),(uint32_t)sizeof(BodyInfo));
+              "sizeof(BodyFilter): %u\nsizeof(BodyInfo): %u\nsizeof(BodyInfo::user): %u\nnum_aux_bodies: %u\n",bd->count,(uint32_t)sizeof(BodyData),(uint32_t)sizeof(Transform),(uint32_t)sizeof(BodyProperties),(uint32_t)sizeof(BodyMomentum),(uint32_t)sizeof(BodyFilter),(uint32_t)sizeof(BodyInfo),size_of_BodyInfo_user,NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES);
     rv=fwrite(bd->transforms,sizeof(Transform),bd->count,f);assert(rv==bd->count);
     rv=fwrite(bd->properties,sizeof(BodyProperties),bd->count,f);assert(rv==bd->count);
     rv=fwrite(bd->momentum,sizeof(BodyMomentum),bd->count,f);assert(rv==bd->count);
@@ -4455,13 +5219,13 @@ void save_context(FILE* f,const context_t* c)   {
     rv=fwrite(&c->global_data,sizeof(GlobalData),1,f);assert(rv==1);
     rv=fwrite(c->global_data.removed_bodies,sizeof(c->global_data.removed_bodies[0]),c->global_data.removed_bodies_count,f);assert(rv==c->global_data.removed_bodies_count);    
     // c->userUint64
-#   ifndef NUDGE_CONTEXT_STRUCT_NO_USER_UNION
-    fprintf(f,"\nsizeof(uint64_t)\n%u\n",(uint32_t)sizeof(uint64_t));
-    rv=fwrite(&c->userUint64,sizeof(uint64_t),1,f);assert(rv==1);
-#   endif // NUDGE_CONTEXT_STRUCT_NO_USER_UNION
+#   ifndef NUDGE_CONTEXT_STRUCT_NO_USER_DATA
+    fprintf(f,"\nsizeof(c->user)\n%u\n",(uint32_t)sizeof(c->user));
+    rv=fwrite(&c->user,sizeof(c->user),1,f);assert(rv==1);
+#   endif // NUDGE_CONTEXT_STRUCT_NO_USER_DATA
 }
 void load_context(FILE* f,context_t* c) {
-    size_t rv = 0;uint32_t tmp[6]={};
+    size_t rv = 0;uint32_t tmp[8]={};
     assert(f && c);
     // max values
     unsigned num_saved_boxes=0,num_saved_spheres=0;
@@ -4474,13 +5238,19 @@ void load_context(FILE* f,context_t* c) {
     // c->bodies
     BodyData* bd = &c->bodies;assert(bd->count<=c->MAX_NUM_BODIES);
     rv=fscanf(f,"BodyData:\ncount: %u\nsizeof(BodyData): %u\nsizeof(Transform): %u\nsizeof(BodyProperties): %u\nsizeof(BodyMomentum): %u\n"
-                "sizeof(BodyFilter): %u\nsizeof(BodyInfo): %u\n",&bd->count,&tmp[0],&tmp[1],&tmp[2],&tmp[3],&tmp[4],&tmp[5]);assert(rv==7);
+                "sizeof(BodyFilter): %u\nsizeof(BodyInfo): %u\nsizeof(BodyInfo::user): %u\nnum_aux_bodies: %u\n",&bd->count,&tmp[0],&tmp[1],&tmp[2],&tmp[3],&tmp[4],&tmp[5],&tmp[6],&tmp[7]);assert(rv==9);
     assert(tmp[0]==sizeof(BodyData));
     assert(tmp[1]==sizeof(Transform));
     assert(tmp[2]==sizeof(BodyProperties));
     assert(tmp[3]==sizeof(BodyMomentum));
     assert(tmp[4]==sizeof(BodyFilter));
     assert(tmp[5]==sizeof(BodyInfo));
+#   ifndef NUDGE_BODYINFO_STRUCT_NO_USER_DATA
+    assert(tmp[6]==sizeof(BodyInfo::user));
+#   else
+    assert(tmp[6]==0);
+#   endif
+    assert(tmp[7]==NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES);
     rv=fread(bd->transforms,sizeof(Transform),bd->count,f);assert(rv==bd->count);
     rv=fread(bd->properties,sizeof(BodyProperties),bd->count,f);assert(rv==bd->count);
     rv=fread(bd->momentum,sizeof(BodyMomentum),bd->count,f);assert(rv==bd->count);
@@ -4532,11 +5302,11 @@ void load_context(FILE* f,context_t* c) {
     c->global_data.removed_bodies = host_ptr;
     rv=fread(c->global_data.removed_bodies,sizeof(c->global_data.removed_bodies[0]),c->global_data.removed_bodies_count,f);assert(rv==c->global_data.removed_bodies_count);    
     // c->userUint64
-#   ifndef NUDGE_CONTEXT_STRUCT_NO_USER_UNION
-    uint32_t uint64_size=0;
-    rv=fscanf(f,"\nsizeof(uint64_t)\n%u\n",&uint64_size);assert(uint64_size==(uint32_t)sizeof(uint64_t));assert(rv==1);
-    rv=fread(&c->userUint64,sizeof(uint64_t),1,f);assert(rv==1);
-#   endif // NUDGE_CONTEXT_STRUCT_NO_USER_UNION
+#   ifndef NUDGE_CONTEXT_STRUCT_NO_USER_DATA
+    uint32_t user_size=0;
+    rv=fscanf(f,"\nsizeof(c->user)\n%u\n",&user_size);assert(user_size==(uint32_t)sizeof(c->user));assert(rv==1);
+    rv=fread(&c->user,sizeof(c->user),1,f);assert(rv==1);
+#   endif // NUDGE_CONTEXT_STRUCT_NO_USER_DATA
 
     // But now we must reassign the remaining tags
     {
@@ -8473,7 +9243,7 @@ void advance(context_t* c,float time_step) {
 
         BodyFilter* filter = &bodies->filters[i];
         if (filter->flags&BF_IS_DYNAMIC
-//             && filter->flags!=RIGIDBODY_FLAG_SENSOR  // Nope!
+             //&& !(filter->flags&BF_IS_SENSOR)  // Nope!
                )    {
             float3 velocity = make_float3(bodies->momentum[i].velocity);
             float3 angular_velocity = make_float3(bodies->momentum[i].angular_velocity);
@@ -8496,6 +9266,7 @@ void advance(context_t* c,float time_step) {
             else {
                 *idle_counter = 0;
             }
+            //if (filter->flags&BF_IS_SENSOR) continue;   // test to remove
 
             Rotation dr = { angular_velocity, 0.f }; // last value was missing (warning: missing initializer for member ‘{anonymous}::Rotation::s’ [-Wmissing-field-initializers])
 

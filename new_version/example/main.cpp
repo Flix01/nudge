@@ -300,7 +300,7 @@ int main(int argc, const char* argv[]) {
     	const float r = globals.inner_torus_radius;
         const float R = globals.outer_torus_radius;      // torus major radius
         float torusMass = 10.5f*R*r;
-        float torusInertia[3];nudge::calculate_torus_inertia(torusInertia,torusMass,R,r,2);
+        float torusInertia[3];nudge::calculate_torus_inertia(torusInertia,torusMass,R,r,nudge::AXIS_Z);
                 
 		T.position[0] = (float)rand() * (1.0f/(float)RAND_MAX) * 10.0f - 5.0f;
 		T.position[1] = (float)rand() * (1.0f/(float)RAND_MAX) * 50.0f-25.f + base_pos_y;

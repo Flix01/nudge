@@ -24,6 +24,8 @@
 // Can be compiled with the provided build files, but also with:
 // c++ -march=native -fno-rtti -fno-exceptions -O3 -fno-rtti -fno-exceptions -openmp-simd -DNDEBUG -I../ ./stdafx.cpp ./example02.cpp -o example02 -lglut -lGL
 
+// Optional definition: -DAZERTY_KEYBOARD_LAYOUT
+
 
 #define EXAMPLE02_CPP_
 
@@ -54,7 +56,6 @@
 #endif //__APPLE__
 
 
-
 // custom replacements of gluPerspective(...) and gluLookAt(...), so that we don't need -lglu
 void glPerspective(float degfovy, float aspect, float zNear, float zFar);
 void glLookAt(float eyeX,float eyeY,float eyeZ,float centerX,float centerY,float centerZ,float upX,float upY,float upZ);
@@ -73,14 +74,18 @@ enum ShapeEnum {
     SHAPE_SKITTLE,
     SHAPE_TORUS_Y,
     SHAPE_TORUS_Z,
+    SHAPE_CONE_Y,
     SHAPE_TEAPOT,
     SHAPE_ROOF,
     SHAPE_CHARACTER,
+    SHAPE_STAR,
     SHAPE_PIVOT3D_CENTER,
     SHAPE_PIVOT3D_AXIS_X,
     SHAPE_PIVOT3D_AXIS_Y,
     SHAPE_PIVOT3D_AXIS_Z,
-	SHAPE_PIVOT3D,    
+    SHAPE_PIVOT3D,
+    SHAPE_AABB,
+    SHAPE_STAR_2D,
     SHAPE_COUNT,
     SHAPE_NONE=SHAPE_COUNT
 };
@@ -133,14 +138,20 @@ static struct globals_t {
         float menu_bg_alpha;
         int blink_markers[3];
     } gui;  // internal
-	GLuint display_lists[SHAPE_COUNT];	// display lists speed up rendering
-	
+    struct selection_t {
+        unsigned body;  // body selected by RMB
+        int16_t box_relative_index,sphere_relative_index;
+    } selection;
+	GLuint display_lists[SHAPE_COUNT];	// display lists speed up rendering	
 	float instantFrameTime; // = 16.2f;
     unsigned kinematic_body;    // we store the index of a kinematic body to move it around manually
     unsigned character_body;    // same as before
+    unsigned star_body,num_stars;
+    unsigned use_frustum_culling;
     unsigned fix_character_sinking_effect_on_fall;   // experiment
+    unsigned num_frustum_culled_bodies; // to monitor frustum culling
 
-} globals = {{},1,0,{{{0,2,0},2*M_PI,M_PI*0.125f,20,{0,0,0}},{{0,2,0},M_PI,M_PI*0.125f,5,{0,0,0}}},{1,1,2},{45.f,0.5f,200.0f},{0,0,0,(uint32_t)-1,0,0},{0,0.65f,{0}},{0},16.2,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,0};
+} globals = {{},1,0,{{{0,2,0},2*M_PI,M_PI*0.125f,20,{0,0,0}},{{0,2,0},M_PI,M_PI*0.125f,5,{0,0,0}}},{1,1,2},{45.f,0.5f,200.0f},{0,0,0,(uint32_t)-1,0,0},{0,0.65f,{0}},{NUDGE_INVALID_BODY_ID,-1,-1},{0},16.2,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,0,1,0,0};
 static nudge::context_t* c = &globals.nudge_context;	// shorter... we'll use this
 
 // some experimental stuff to ease tweaking/debugging
@@ -149,29 +160,30 @@ void glprintf_blinkmarker(int idx);     // interaction with the blink markups: g
 
 // these are mainly used to improve GLUT key handling. I'd use a uint64_t enum here, but it requires C++11 support (unless we use messy variables or #defines instead of typed enums)
 enum KeyMask {KEY_REGULAR_KEY_START_INDEX=0,
-              KEY_W=1<<0,KEY_A=1<<1,KEY_S=1<<2,KEY_D=1<<3,KEY_WASD=KEY_W|KEY_A|KEY_S|KEY_D,KEY_J=1<<4,KEY_SPACE=1<<5,KEY_R=1<<6,KEY_ESC=1<<7,KEY_ENTER=1<<8,KEY_H=1<<9,KEY_M=1<<10,
-              KEY_NUM_REGULAR_KEYS=11,
-              KEY_MODIFIER_KEY_START_INDEX=11,
-              KEY_SHIFT=1<<11,KEY_CTRL=1<<12,KEY_ALT=1<13,KEY_ALL_MODIFIER_KEYS=KEY_SHIFT|KEY_CTRL|KEY_ALT,
+              KEY_W=1<<0,KEY_A=1<<1,KEY_S=1<<2,KEY_D=1<<3,KEY_WASD=KEY_W|KEY_A|KEY_S|KEY_D,KEY_J=1<<4,KEY_SPACE=1<<5,KEY_R=1<<6,KEY_ESC=1<<7,KEY_ENTER=1<<8,KEY_H=1<<9,KEY_M=1<<10,KEY_F=1<<11,
+              KEY_NUM_REGULAR_KEYS=12,
+              KEY_MODIFIER_KEY_START_INDEX=12,
+              KEY_SHIFT=1<<12,KEY_CTRL=1<<13,KEY_ALT=1<14,KEY_ALL_MODIFIER_KEYS=KEY_SHIFT|KEY_CTRL|KEY_ALT,
               KEY_NUM_MODIFIER_KEYS=3,
-              KEY_SPECIAL_KEY_START_INDEX=14,
-              KEY_LEFT=1<<14,KEY_RIGHT=1<<15,KEY_UP=1<<16,KEY_DOWN=1<<17,KEY_ALL_ARROW_KEYS=KEY_LEFT|KEY_RIGHT|KEY_UP|KEY_DOWN,
-              KEY_PAGE_UP=1<<18,KEY_PAGE_DOWN=1<<19,KEY_PAGE_UP_OR_DOWN=KEY_PAGE_UP|KEY_PAGE_DOWN,KEY_HOME=1<<20,KEY_END=1<<21,
-              KEY_F1=1<<22,KEY_F3=1<<23,KEY_F5=1<<24,KEY_F7=1<<25,KEY_ALL_SUPPORTED_FUNCTION_KEYS=KEY_F1|KEY_F3|KEY_F5|KEY_F7,
-              KEY_NUM_SPECIAL_KEYS=25-KEY_SPECIAL_KEY_START_INDEX+1,
-              KEY_MOUSE_KEY_START_INDEX=26,
-              KEY_MOUSE_BUTTON_LEFT=1<<26,KEY_MOUSE_BUTTON_RIGHT=1<<27,KEY_MOUSE_BUTTON_LEFT_OR_RIGHT=KEY_MOUSE_BUTTON_LEFT|KEY_MOUSE_BUTTON_RIGHT,
-              KEY_MOUSE_BUTTON_MIDDLE=1<<28,KEY_ALL_MOUSE_BUTTONS=KEY_MOUSE_BUTTON_LEFT_OR_RIGHT|KEY_MOUSE_BUTTON_MIDDLE,
-              KEY_WOUSE_WHEEL_UP=1<<29,KEY_MOUSE_WHEEL_DOWN=1<<30,KEY_MOUSE_WHEEL_UP_OR_DOWN=KEY_WOUSE_WHEEL_UP|KEY_MOUSE_WHEEL_DOWN,KEY_ALL_MOUSE_BUTTONS_AND_WHEEL=KEY_ALL_MOUSE_BUTTONS|KEY_MOUSE_WHEEL_UP_OR_DOWN,
-              KEY_NUM_MOUSE_KEYS=30-KEY_MOUSE_KEY_START_INDEX+1
+              KEY_SPECIAL_KEY_START_INDEX=15,
+              KEY_LEFT=1<<15,KEY_RIGHT=1<<16,KEY_UP=1<<17,KEY_DOWN=1<<18,KEY_ALL_ARROW_KEYS=KEY_LEFT|KEY_RIGHT|KEY_UP|KEY_DOWN,
+              KEY_PAGE_UP=1<<19,KEY_PAGE_DOWN=1<<20,KEY_PAGE_UP_OR_DOWN=KEY_PAGE_UP|KEY_PAGE_DOWN,KEY_HOME=1<<21,KEY_END=1<<22,
+              KEY_F1=1<<23,KEY_F3=1<<24,KEY_F5=1<<25,KEY_F7=1<<26,KEY_ALL_SUPPORTED_FUNCTION_KEYS=KEY_F1|KEY_F3|KEY_F5|KEY_F7,
+              KEY_NUM_SPECIAL_KEYS=26-KEY_SPECIAL_KEY_START_INDEX+1,
+              KEY_MOUSE_KEY_START_INDEX=27,
+              KEY_MOUSE_BUTTON_LEFT=1<<27,KEY_MOUSE_BUTTON_RIGHT=1<<28,KEY_MOUSE_BUTTON_LEFT_OR_RIGHT=KEY_MOUSE_BUTTON_LEFT|KEY_MOUSE_BUTTON_RIGHT,
+              KEY_MOUSE_BUTTON_MIDDLE=1<<29,KEY_ALL_MOUSE_BUTTONS=KEY_MOUSE_BUTTON_LEFT_OR_RIGHT|KEY_MOUSE_BUTTON_MIDDLE,
+              KEY_WOUSE_WHEEL_UP=1<<30,KEY_MOUSE_WHEEL_DOWN=1<<31,KEY_MOUSE_WHEEL_UP_OR_DOWN=KEY_WOUSE_WHEEL_UP|KEY_MOUSE_WHEEL_DOWN,KEY_ALL_MOUSE_BUTTONS_AND_WHEEL=KEY_ALL_MOUSE_BUTTONS|KEY_MOUSE_WHEEL_UP_OR_DOWN,
+              KEY_NUM_MOUSE_KEYS=31-KEY_MOUSE_KEY_START_INDEX+1
              };
 
 
 // Please note that code related to nudge physics is mostly grouped in the functions that follow
 // You can usually avoid to read further. 80% of the physics code is in InitPhysics().
-inline void bind_body(nudge::context_t* c,unsigned body,ShapeEnum shape,ColorEnum color=COLOR_NONE) {c->bodies.infos[body].userUint16[0] = shape;c->bodies.infos[body].userUint16[1] = color;}
-inline ShapeEnum bodyinfo_get_shape_enum(const nudge::BodyInfo* info) {return (ShapeEnum) info->userUint16[0];}
-inline ColorEnum bodyinfo_get_color_enum(const nudge::BodyInfo* info) {return (ColorEnum) info->userUint16[1];}
+inline void bind_body(nudge::context_t* c,unsigned body,ShapeEnum shape,ColorEnum color=COLOR_NONE) {c->bodies.infos[body].user.u16[0] = shape;c->bodies.infos[body].user.u16[1] = color;}
+inline ShapeEnum bodyinfo_get_shape_enum(const nudge::BodyInfo* info) {return (ShapeEnum) info->user.u16[0];}
+inline ColorEnum bodyinfo_get_color_enum(const nudge::BodyInfo* info) {return (ColorEnum) info->user.u16[1];}
+float* getStarPosition(unsigned number); // forward declaration
 void InitPhysics() {
     using namespace nudge;
     if (c->MAX_NUM_BODIES==0) {
@@ -239,15 +251,17 @@ void InitPhysics() {
         {{{0,0,0}},{},{{0,0,0,1}}},   // sphere2
     };    
     float cylmass = 1.f;
-    float cylInertia[3]; calculate_cylinder_inertia(cylInertia,cylmass,cylradius,cylhheight,2);
+    float cylInertia[3]; calculate_cylinder_inertia(cylInertia,cylmass,cylradius,cylhheight,AXIS_Z);
     const bool cylUseJust2Spheres = false;  // we can save the sphere at the center if we like
     body = add_compound(c,cylmass,cylInertia,1,cylsize,&cylT[0],cylUseJust2Spheres?2:3,cylradii,&cylT[1],&T,NULL);
     bind_body(c,body,SHAPE_CYLINDER_Z,COLOR_LIGHTGOLDENRODYELLOW);
+
     T.p[1]+=2.f;T.p[2]-=3.f;cylT[1].p[2]+=cylradius;cylT[2].p[2]-=cylradius;    // in the case of capsule cylhheight is the half height without radius
     nm_QuatFromAngleAxis(T.q,-M_DEG2RAD(90.f),0.f,1.f,0.f);
-    float capsInertia[3]; calculate_capsule_inertia(capsInertia,cylmass,cylradius,cylhheight,2);
+    float capsInertia[3]; calculate_capsule_inertia(capsInertia,cylmass,cylradius,cylhheight,AXIS_Z);
     body = add_compound(c,cylmass,capsInertia,1,cylsize,&cylT[0],cylUseJust2Spheres?2:3,cylradii,&cylT[1],&T,NULL); // inertia is slightly incorrect here... nevermind
     bind_body(c,body,SHAPE_CAPSULE_Z,COLOR_LIGHTSEAGREEN);
+
 
     // short cylinder (box compound)
     T=identity_transform;
@@ -272,14 +286,13 @@ void InitPhysics() {
     body = add_compound(c,cylmass,cylInertia,num_boxes_for_scyl,hsizeTripletsForScyl,scylT,0,NULL,NULL,&T);
     bind_body(c,body,SHAPE_CYLINDER_Z,COLOR_AQUA);
 
-
     // torus (box compund)
     T=identity_transform;
     const float torusScale = 1.0f;const float torusMass = 1.f;  // in short we can only scale the torus globally, because we use display list for drawing shapes (relation between R and r is fixed)
     T.p[0]=0.f;T.p[1]=1.f*torusScale;T.p[2]=-2.5f;
     // code for experts
     float r = 0.2f*torusScale, R = 0.8f*torusScale;
-    float torusInertia[3];calculate_torus_inertia(torusInertia,torusMass,R,r,2);
+    float torusInertia[3];calculate_torus_inertia(torusInertia,torusMass,R,r,AXIS_Z);
     Transform csT[8];const int num_boxes = (int) sizeof(csT)/sizeof(csT[0]);
     float hsizeTripletsForTorus[num_boxes*3];
     const float boxLength = R * sin(M_PI/(float)num_boxes);
@@ -322,38 +335,53 @@ void InitPhysics() {
         tr->p[2]=-(cylradius)*cosAngle;
     }
     cylmass = 2.f;
-    calculate_hollow_cylinder_inertia(cylInertia,cylmass,cylradius+cylinnerradius,cylradius-cylinnerradius,cylhheight,1);
+    calculate_hollow_cylinder_inertia(cylInertia,cylmass,cylradius+cylinnerradius,cylradius-cylinnerradius,cylhheight,AXIS_Y);
     body = add_compound(c,cylmass,cylInertia,num_boxes_for_scyl,hsizeTripletsForScyl,scylT,0,NULL,NULL,&T);
     bind_body(c,body,SHAPE_HOLLOW_CYLINDER_Y,COLOR_YELLOW);
     T=identity_transform;T.p[0]=-7.5f;T.p[2]=1.f;T.p[1]=cylhheight;
     body = add_compound(c,0,NULL,num_boxes_for_scyl,hsizeTripletsForScyl,scylT,0,NULL,NULL,&T);
     bind_body(c,body,SHAPE_HOLLOW_CYLINDER_Y,COLOR_ORANGE);
 
-    // sensor (test) cylradius
-    const bool enable_sensor_test = false;
-    if (enable_sensor_test) {
-        T.p[1]=cylhheight*0.1f;
-        body = add_box(c,1000.f,cylradius/1.45f,T.p[1],cylradius/1.45f,&T);
+    // sensor experiment (test)
+    T.p[1]=cylhheight*0.1f;
+    const bool correct_way_to_make_a_sensor = false;
+    if (correct_way_to_make_a_sensor) {
+        body = add_box(c,1000.f,cylradius/1.9f,T.p[1],cylradius/1.9f,&T);
         float* tmp = c->bodies.properties[body].inertia_inverse;tmp[0]=tmp[1]=tmp[2]=0;
         tmp = c->bodies.properties[body].gravity;tmp[0]=tmp[1]=tmp[2]=0;
-        c->bodies.filters[body].collision_group = COLLISION_GROUP_G;    // our 'sensor' group (we could store a specific body index instead...)
+        c->bodies.filters[body].flags|=BF_IS_SENSOR;    // note that BF_IS_SENSOR ia completely unused  in nudge.h (just an empty tag)
         c->bodies.filters[body].collision_mask = 0; // don't collide with any body
-        c->bodies.filters[body].flags|=BF_NEVER_SLEEPING;   // by default now there should be a (unused) BF_IS_SENSOR flag in nudge.h, but we don't use it
+        c->bodies.filters[body].flags|=BF_NEVER_SLEEPING;   // this is bad! This way c->active_bodies.count is always positive!
+        bind_body(c,body,SHAPE_NONE,COLOR_RED);
+    }
+    else {
+        // This is the only way to use a kinematic body as sensor but... it's not a sensor anymore (it collides with other bodies)
+        // The catch is:
+        // if collision filters of body A prevent collision with some body B, than contact data between body A and body B are not reported UNLESS A is a DYNAMIC body AND A is not sleeping
+        // so if we want to use static or kinematic bodies as sensors, we must enable collisions with the body we must detect => it's not a sensor anymore
+        // Note that for the purpose of this demo the effect is the same
+        body = add_box(c,0.f,cylradius/1.9f,T.p[1],cylradius/1.9f,&T);
+        c->bodies.filters[body].flags|=BF_IS_SENSOR;    // note that BF_IS_SENSOR ia completely unused  in nudge.h (just an empty tag)
+        //c->bodies.filters[body].collision_mask = 0; // [NOPE!] don't collide with any body (if set => no more collisions reported here)
         bind_body(c,body,SHAPE_NONE,COLOR_RED);
         /*
-        Considerations:
-        1) of course this needs code in the [collision query] section
-        2) currently sensors work only this way (e.g. dynamic, non-sleeping bodies)
-        What I don't like is the line: c->bodies.filters[body].flags|=BF_NEVER_SLEEPING;
-        because in the physics view we can't detect when all the bodies are out of the
-        c->active_bodies list anymore (when everything becomes dark black). So this is
-        probably costly...
-        I was thinking of removing BF_NEVER_SLEEPING from nudge.h, but if there's
-        no other way to make sensors...
-        (note that both static and dynamic bodies in (my mod of) nudge.h are always kept in sleep
-        mode by design). Basically I want to be able to detect zero active_bodies...
+            Considerations:
+            1) of course this needs code in the [collision query] section
+            2) currently sensors work only this way (e.g. dynamic, non-sleeping bodies)
+            What I don't like is the line: c->bodies.filters[body].flags|=BF_NEVER_SLEEPING;
+            because in the physics view we can't detect when all the bodies are out of the
+            c->active_bodies list anymore (when everything becomes dark black). So this is
+            probably costly...
+            I was thinking of removing BF_NEVER_SLEEPING from nudge.h, but if there's
+            no other way to make sensors...
+            (note that both static and dynamic bodies in (my mod of) nudge.h are always kept in sleep
+            mode by design). Basically I want to be able to detect zero active_bodies...
+
+            In a typical application, we can probably mitigate the 'correct_way' by removing the 'BF_NEVER_SLEEPING'
+            flag when the body is distant (but it's a solution I don't like).
         */
     }
+
 
     // skittles (box) [comOffset test][collision group test]
     T=identity_transform;
@@ -376,6 +404,46 @@ void InitPhysics() {
         c->bodies.filters[body].collision_group = COLLISION_GROUP_A;   // group the body belongs to (see flags of next body)
     }
     memset(comOffset,0,sizeof(float)*3);    // reset comOffset variable
+
+
+    // test extra:: namespace
+    T=identity_transform;T.p[0]=-3.5f;T.p[1]=0.5f;T.p[2]=6.f;
+    body = extra::add_compound_cylinder(c,0.3f,0.25f,T.p[1],&T,AXIS_Y,0,0);
+    bind_body(c,body,SHAPE_CYLINDER_Y,COLOR_PINK);
+
+    // test extra:: namespace
+    T=identity_transform;T.p[0]=-5.0f;T.p[1]=1.f;T.p[2]=6.f;
+    body = extra::add_compound_capsule(c,0.5f,0.25f,0.5f,&T,AXIS_Y,0,0);
+    bind_body(c,body,SHAPE_CAPSULE_Y,COLOR_AZURE);
+
+    // test extra:: namespace
+    T=identity_transform;T.p[0]=-7.0f;T.p[1]=0.5f;T.p[2]=8.f;
+    body = extra::add_compound_cone(c,0.5f,0.75f,T.p[1],&T,AXIS_Y,0,0);
+    bind_body(c,body,SHAPE_CONE_Y,COLOR_YELLOW);
+
+    // test extra:: namespace
+    T=identity_transform;T.p[0]=-6.5f;T.p[1]=1.f;T.p[2]=6.f;
+    body = extra::add_compound_hollow_cylinder(c,0.5f,0.25f,0.5,0.5f,&T,AXIS_Y,0,0);
+    bind_body(c,body,SHAPE_HOLLOW_CYLINDER_Y,COLOR_ORANGERED);
+
+    // test extra:: namespace
+    T=identity_transform;T.p[0]=-6.5f;T.p[1]=0.225f;T.p[2]=4.f;
+    body = extra::add_compound_torus(c,1.f,T.p[1]*4.f,T.p[1],&T,AXIS_Y,16); // the 'graphic' torus is hard-coded in the display lists, so we can't freely choose its two radii (and I'm not sure factor 4.f is correct)
+    bind_body(c,body,SHAPE_TORUS_Y,COLOR_YELLOW);
+
+    // test extra:: namespace
+    T=identity_transform;T.p[0]=-5.0f;T.p[1]=0.5f;T.p[2]=4.f;
+    body = extra::add_compound_prism(c,1.f,0.5f,T.p[1],15,&T,AXIS_Y);
+    bind_body(c,body,SHAPE_CYLINDER_Y,COLOR_SKYBLUE);
+
+    // star (box) [collectable test]
+    if (globals.num_stars<12) {
+        T=identity_transform;memcpy(T.p,getStarPosition(globals.num_stars),3*sizeof(float));
+        globals.star_body = body = add_box(c,-2.f,0.5f,0.5,0.1,&T);
+        body_set_collision_group_and_mask(c,body,COLLISION_GROUP_F,COLLISION_GROUP_C);
+        bind_body(c,body,SHAPE_STAR,COLOR_YELLOW);
+    }
+    else globals.star_body=NUDGE_INVALID_BODY_ID;
 
     // kinematic teapot (box) [manual kinematic body test] [collision mask test]
     T=identity_transform;T.p[0]=1.5f;T.p[1]=0.5f;T.p[2]=8.0f;
@@ -445,11 +513,12 @@ void InitPhysics() {
     // experimental character (ehm...) controller (box)
     T=identity_transform;T.p[0]=7.5f;T.p[1]=0.65f;T.p[2]=-4.f;nm_QuatFromAngleAxis(T.q,-M_PI*0.5f,0,1,0);
     body = add_box(c,20.f,.3f,T.p[1],0.1f,&T);
-    bind_body(c,body,SHAPE_CHARACTER,COLOR_YELLOW);
+    bind_body(c,body,SHAPE_CHARACTER,globals.num_stars<12?COLOR_YELLOW:COLOR_ORANGE);
     globals.character_body = body;assert(body==c->bodies.transforms[body].body);
     float* in_inv = c->bodies.properties[body].inertia_inverse;in_inv[0]=in_inv[1]=in_inv[2]=0.f;
     c->bodies.properties[body].friction=4.5f;  // default body friction is 1.f AFAIR
     c->bodies.filters[body].flags|=BF_IS_CHARACTER; // note that this flag does nothing in nudge.h
+    c->bodies.filters[body].collision_group=COLLISION_GROUP_C;
 
     // experimental platform (box)
     {
@@ -538,16 +607,18 @@ void InitPhysics() {
     T=identity_transform;T.p[0]=-11.0275f;T.p[1]=-0.198f;T.p[2]=5.f;
     body = add_box(c,0,2.025f,0.2f,1.5f,&T);
     bind_body(c,body,SHAPE_BOX,COLOR_RED);
-    c->bodies.momentum[body].velocity[0]=-1.5f;
+    c->bodies.momentum[body].velocity[0]=-1.5f; // in this demo it does not work, because we're overriding this value at runtime in DrawPhysics(), but it works
     c->bodies.properties[body].friction = 2.f;
-    c->bodies.filters[body].flags|=BF_IS_PLATFORM;  // test
+    c->bodies.filters[body].flags|=BF_IS_CONVEYOR_BELT;  // this flag is unused in nudge.h (just a naming tag)
+    c->bodies.filters[body].flags|=BF_IS_PLATFORM;  // test (toggle and see the difference on character)
 
     T.p[0]=-12.f;T.p[1]=4.f-0.2f;T.p[2]=-0.25f;
     body = add_box(c,0,1.f,0.2f,4.75f,&T);
     bind_body(c,body,SHAPE_BOX,COLOR_RED);
-    c->bodies.momentum[body].velocity[2]=-1.5f;
+    c->bodies.momentum[body].velocity[2]=-1.5f; // in this demo it does not work, because we're overriding value at runtime in DrawPhysics(), but it works
     c->bodies.properties[body].friction = 2.f;
-    c->bodies.filters[body].flags|=BF_IS_PLATFORM;  // test
+    c->bodies.filters[body].flags|=BF_IS_CONVEYOR_BELT;  // this flag is unused in nudge.h (just a naming tag)
+    c->bodies.filters[body].flags|=BF_IS_PLATFORM;  // test (toggle and see the difference on character)
 
 
     // another moving platform: rotating platform test here (box)
@@ -678,16 +749,20 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
     const unsigned numSubSteps = nudge::pre_simulation_step(c,elapsedSecondsFromLastCall); // Mandatory
     if (numSubSteps) {
         const double granularElapsedTime = numSubSteps*c->simulation_params.time_step;
+
+        // common quantities we'll use in this scope
+        float* angle = &c->user.f32[1];    // here we use a user field of the nudge::context, so that it gets saved/load with it
+        (*angle)+=(float)(granularElapsedTime*1.5);if (*angle>M_PI*2.0f) (*angle)-=M_PI*2.0f;
+        const float sinAngle = sinf(*angle),cosAngle = cosf(*angle);
+
         // we must manually advance our 'manual' kinematic bodies by granularElapsedTime
         if (globals.kinematic_body<c->bodies.count) {
             using namespace nudge;
             const float basePosition[3] = {1.5f,0.5f,5.0};const float amplitude = 3.0f;
             const Transform* T = &c->bodies.transforms[globals.kinematic_body];  // Tip: don't change this directly!
             assert(T->body==globals.kinematic_body);    // did you know it?
-            float* angle = &c->userFloat[1];    // here we need a static angle to increment: instead we use a user field of the nudge::context, so that it gets saved/load with it
-            (*angle)+=(float)(granularElapsedTime*1.5);if (*angle>M_PI*2.0f) (*angle)-=M_PI*2.0f;
-            const float sinAngle = amplitude*sinf(*angle),cosAngle = amplitude*cosf(*angle);
-            Transform newT= { {{basePosition[0]+sinAngle,T->p[1],basePosition[2]+cosAngle}},{},{{T->r[0],T->r[1],T->r[2],T->r[3]}} };assert(newT.r[3]!=0);
+
+            Transform newT= { {{basePosition[0]+amplitude*sinAngle,T->p[1],basePosition[2]+amplitude*cosAngle}},{},{{T->r[0],T->r[1],T->r[2],T->r[3]}} };assert(newT.r[3]!=0);
             nm_QuatFromAngleAxis(newT.r,*angle+M_PI*0.5f,0.f,1.f,0.f);   // this line rotates the body while moving in circle
             // this function moves the current body transform (i.e. T) to the new one (newT). It does two things:
             // 1) sets: T=newT
@@ -714,7 +789,7 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
                 // now it's just incremental... but this is just a raw test
                 // also if the character is too heavy then if he jumps on any
                 // dynamic body he makes it sink into the ground...
-                const float amount = 2.f;
+                const float amount = 5.f;
                 c->bodies.momentum[globals.character_body].velocity[1]+=amount;
                 if (c->bodies.filters[globals.character_body].flags&BF_IS_DYNAMIC) c->bodies.idle_counters[globals.character_body]=0;  // wakes up body (dynamic body only)
             }
@@ -761,22 +836,21 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
                     //nudge::log("[%lu]: ON PLATFORM\n",c->simulation_params.num_frames);
                 }*/
             }
-            if (character_must_jump) {
-                const float amount = 5.f;
-                c->bodies.momentum[globals.character_body].velocity[1]+=amount;
-                if (c->bodies.filters[globals.character_body].flags&BF_IS_DYNAMIC) c->bodies.idle_counters[globals.character_body]=0;  // wakes up body (dynamic body only)
-            }
             // Last note:
             // I'm not sure that a character controller can be done with this
             // simple, proof-of-a-concept header-only physics sengine (although IMHO
             // it's one of the most useful single-header C file ever written!)
         }
+        // and we animate the star
+        if (globals.star_body<c->bodies.count && c->bodies.filters[globals.star_body].flags&nudge::BF_IS_STATIC_OR_KINEMATIC) {
+            using namespace nudge;assert(globals.num_stars<12);
+            const float y = getStarPosition(globals.num_stars)[1];
+            Transform* T = &c->bodies.transforms[globals.star_body];T->p[1]=y+0.2f*cosAngle;
+            nm_QuatFromAngleAxis(T->q,*angle,0,1,0);
+        }
     }
     nudge::simulation_step(c);  // Mandatory
 
-    /*nudge::SimulationParams* sp=&c->simulation_params;
-    glprintf("numSubSteps:%u(%u) timeStep:%1.4f;remainingTimeInSec:%1.4f;timeStepMinusRTIS:%1.4f;\nnumFrames:%lu;numTotalSubSteps:%lu",numSubSteps,
-             sp->num_substeps_in_last_frame,sp->time_step,sp->remaining_time_in_seconds,sp->time_step_minus_remaining_time, sp->num_frames,sp->num_total_substeps);*/
 
     // collision query
     if (numSubSteps>0)  {        
@@ -784,11 +858,11 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
         using namespace nudge;
         const ContactData* cd = &c->contact_data;
         assert(c && cd);
-        unsigned num_wrong_contacts=0;
+        //unsigned num_wrong_contacts=0;
         for (unsigned i = 0; i < cd->count; i++) {
             const unsigned a = cd->bodies[i].a, b = cd->bodies[i].b;
             const BodyFilter *a_filter = &c->bodies.filters[a], *b_filter = &c->bodies.filters[b];
-            if (a_filter->flags&BF_IS_DISABLED || b_filter->flags&BF_IS_DISABLED) ++num_wrong_contacts;
+            //if (a_filter->flags&BF_IS_DISABLED || b_filter->flags&BF_IS_DISABLED) ++num_wrong_contacts;
             if (a==b) continue; // Not sure if/why this happens
             /*const int a_dynamic = (a_filter->flags&BF_IS_DYNAMIC);
                const int b_dynamic = (b_filter->flags&BF_IS_DYNAMIC);
@@ -796,32 +870,52 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
                if (sum_dynamic==0) continue;   // Why this case is present in the first place? */
             //const uint64_t tag = cd->tags[i];
 
+            //assert(a_filter->flags&BF_IS_DYNAMIC || b_filter->flags&BF_IS_DYNAMIC);
             // sensor test ------------
-            if (a_filter->collision_group==COLLISION_GROUP_G || b_filter->collision_group==COLLISION_GROUP_G)   {
+            if (a_filter->flags&BF_IS_SENSOR || b_filter->flags&BF_IS_SENSOR)  {
                 unsigned detected_body = NUDGE_INVALID_BODY_ID;
-                if (a_filter->collision_group==COLLISION_GROUP_G && b_filter->flags&BF_IS_DYNAMIC && b_filter->collision_group!=COLLISION_GROUP_G) detected_body=b;
-                else if (b_filter->collision_group==COLLISION_GROUP_G && a_filter->flags&BF_IS_DYNAMIC && a_filter->collision_group!=COLLISION_GROUP_G) detected_body=a;
-                if (detected_body!=NUDGE_INVALID_BODY_ID) c->bodies.momentum[detected_body].velocity[1]=16.f;
+                if (a_filter->flags&BF_IS_SENSOR && b_filter->flags&BF_IS_DYNAMIC && !(b_filter->flags&BF_IS_SENSOR)) detected_body=b;
+                else if (b_filter->flags&BF_IS_SENSOR && a_filter->flags&BF_IS_DYNAMIC && !(a_filter->flags&BF_IS_SENSOR)) detected_body=a;
+                if (detected_body!=NUDGE_INVALID_BODY_ID) c->bodies.momentum[detected_body].velocity[1]=10.f;
             }
             // end sensor test --------
 
-            const int a_is_character = a_filter->flags&BF_IS_CHARACTER;
-            const int b_is_character = b_filter->flags&BF_IS_CHARACTER;
+            const FlagMask a_is_character = a_filter->flags&BF_IS_CHARACTER;
+            const FlagMask b_is_character = b_filter->flags&BF_IS_CHARACTER;
             if ((a_is_character||b_is_character) && !(a_is_character&&b_is_character))  // Last condition should be handled... (but how to know which character is above the other?)
             {
                 // These code assigns a 'ground' to 'character' (1-to allow jumping only when is present;2-to allow correct walking on moving platforms)
-                const uint32_t character = a_is_character?a:b,other_body = a_is_character?b:a;
-                int16_t* character_aux_body = &c->bodies.infos[character].aux_bodies[0];
-                if (*character_aux_body==-1)    {
-                    // Check if contact is below 'character', and set aux_body for 'character'
-                    // cd->data->position and T->position are in world space
-                    // we assume contact normal is in the world space... (it makes no sense, because it should depend on the order of the two bodies, but it works)
-                    // actually we are just testing: contact->normal[1]<-0.95f AFAICS, so the normal points down not up...
-                    // we should do extensive tests to understand if body order is random or if static/kinematic vs dynamic has a specific order, etc...
-                    const Contact* contact = &cd->data[i];
-                    const float dot_down =  contact->normal[0]*0+contact->normal[1]*-1+contact->normal[2]*0;  // TODO: Better dot between contact->normal and body gravity (and normalize)
-                    const int is_on_ground = (a_is_character&&dot_down>0.95f) || (b_is_character&&dot_down<-0.95f);   // TODO: Never tested the second part (I always have a_is_character)
-                    if (is_on_ground) *character_aux_body=(int16_t) other_body;
+                const uint32_t character = a_is_character?a:b,other_body = a_is_character?b:a;int dbg=0;
+                if (other_body==globals.star_body
+                        //|| (dbg=globals.key.down&KEY_SHIFT && globals.key.down&KEY_SPACE)
+                        ) {
+                    BodyFilter* other_body_filters;
+                    if (dbg) {*( (uint32_t*) &other_body) = globals.star_body;other_body_filters = &c->bodies.filters[other_body];}
+                    else other_body_filters = a_is_character ? (BodyFilter*)b_filter : (BodyFilter*)a_filter;
+                    if (other_body_filters->flags&BF_IS_STATIC_OR_KINEMATIC)    {
+                        ++globals.num_stars;
+                        body_change_motion_state(c,other_body,BF_IS_DYNAMIC);
+                        other_body_filters->collision_mask=0;   // turn off collisions with everything
+                        const float *camPos = globals.camera[globals.use_character_camera].cameraPos, *starPos = c->bodies.transforms[other_body].p;
+                        float vec[3]={camPos[0]-starPos[0],camPos[1]+10.f-starPos[1],camPos[2]-starPos[2]},len=nm_Vec3Normalize(vec);
+                        const float amount=len*0.5f;vec[0]*=amount;vec[1]*=amount;vec[2]*=amount;
+                        float *lin_vel = c->bodies.momentum[other_body].velocity, *ang_vel = c->bodies.momentum[other_body].angular_velocity;
+                        memcpy(lin_vel,vec,3*sizeof(float));ang_vel[0]=0;ang_vel[1]=15.f;ang_vel[2]=0;
+                    }
+                }
+                else {
+                    int16_t* character_aux_body = &c->bodies.infos[character].aux_bodies[0];
+                    if (*character_aux_body==-1)    {
+                        // Check if contact is below 'character', and set aux_body for 'character'
+                        // cd->data->position and T->position are in world space
+                        // we assume contact normal is in the world space... (it makes no sense, because it should depend on the order of the two bodies, but it works)
+                        // actually we are just testing: contact->normal[1]<-0.95f AFAICS, so the normal points down not up...
+                        // we should do extensive tests to understand if body order is random or if static/kinematic vs dynamic has a specific order, etc...
+                        const Contact* contact = &cd->data[i];
+                        const float dot_down =  contact->normal[0]*0+contact->normal[1]*-1+contact->normal[2]*0;  // TODO: Better dot between contact->normal and body gravity (and normalize)
+                        const int is_on_ground = (a_is_character&&dot_down>0.95f) || (b_is_character&&dot_down<-0.95f);   // TODO: Never tested the second part (I always have a_is_character)
+                        if (is_on_ground) *character_aux_body=(int16_t) other_body;
+                    }
                 }
             }
             // Here we simply report collisions
@@ -851,6 +945,8 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
 }
 
 void CharacterControllerFixSinkingEffectOnFall(unsigned body,float* mMatrix16,int16_t aux_body);  // forward declaration
+int glIsAabbVisible(const float*__restrict mMatrix16,float aabbCenterX,float aabbCenterY,float aabbCenterZ,float aabbHalfExtentX,float aabbHalfExtentY,float aabbHalfExtentZ); // forward declaration
+int glIsAabbVisible(const float* __restrict Tpos3,float aabbEnlargedRadius); // forward declaration
 void DrawPhysics()  {
     using namespace nudge;
     // Note: this function is part of DrawGL, and it occasionally contains gl calls
@@ -861,156 +957,160 @@ void DrawPhysics()  {
     const ColorEnum sleeping_color = COLOR_DARKSLATEGRAY;
     const ColorEnum com_offset_body_color = COLOR_DARKBLUE;
 
-    glPushMatrix();
-    float mMatrix[16];unsigned num_sleeping_and_dynamic=0;
+    float mMatrix[16];unsigned num_sleeping_and_dynamic=0;globals.num_frustum_culled_bodies=0;
     const int use_graphic_transform = globals.use_graphic_transform;
     for (unsigned body=0,body_count=c->bodies.count;body<body_count;body++)	{
-        const BodyFilter* filter = &c->bodies.filters[body];	// BodyFilter hosts per-body flags, collision masks and sleeping state
+        BodyFilter* filter = &c->bodies.filters[body];	// BodyFilter hosts per-body flags, collision masks and sleeping state
         if (filter->flags&BF_IS_DISABLED_OR_REMOVED) continue;
+        filter->flags&=~BF_IS_FRUSTUM_CULLED;   // removes this flag from the body
+        const BodyInfo* info = &c->bodies.infos[body];   // BodyInfo hosts our custom per-body (user-side) data (in this example the SHAPE_ enum and the COLOR_ enum), plus per-body aabb data
+        const ShapeEnum shape = bodyinfo_get_shape_enum(info);
+
+        //------------------------------------------------------------
+        // we exploit this loop to remove fallen bodies so that their colliders (i.e. collision shapes)
+        // are freed and the body indices are reusable by nudge::add_ (this happens automatically)
+        if (c->bodies.transforms[body].p[1]<-40.f && filter->flags&BF_IS_DYNAMIC) {
+            // here we just remove (graphic) boxes and spheres, and respawn other bodies
+            if ((shape==SHAPE_BOX || shape==SHAPE_SPHERE || (body==globals.star_body && globals.num_stars==12)) && !(filter->flags&(BF_IS_CHARACTER|BF_IS_PLATFORM))) {
+                remove_body(c,body);if (body==globals.selection.body) {globals.selection.body=NUDGE_INVALID_BODY_ID;globals.selection.box_relative_index=globals.selection.sphere_relative_index=-1;}
+                if (body==globals.star_body) {
+                    globals.star_body=NUDGE_INVALID_BODY_ID;
+                    if (globals.character_body<c->bodies.count) {bind_body(c,globals.character_body,SHAPE_CHARACTER,COLOR_ORANGE);c->bodies.momentum[globals.character_body].velocity[1]=5.f;}
+                }
+                continue;
+            }
+            else if (body==globals.star_body) {
+                assert(globals.num_stars<12);// when a star falls to the bottom we must display next star
+                body_change_motion_state(c,body,BF_IS_KINEMATIC);filter->collision_mask=COLLISION_GROUP_C;  // restore flags/collision mask
+                memcpy(c->bodies.transforms[body].p,getStarPosition(globals.num_stars),3*sizeof(float));
+                assert(c->bodies.transforms[body].p[1]>-40.f);
+            }
+            else {Transform* T = &c->bodies.transforms[body];T->p[0]=0.f;T->p[1]=20.f;T->p[2]=0.0f;} // respawn all the other bodies
+        }
+        // and also exploit this loop to change the velocity of our conveyor belts dynamically (better move this code somewhere else)
+        if (filter->flags&BF_IS_CONVEYOR_BELT) {
+            float* velocity = c->bodies.momentum[body].velocity;
+            const int axis = info->aabb_half_extents[0]>info->aabb_half_extents[2]?0:2;
+            // here we reuse c->user.f32[1], that we assign when we manually move the kinematic teapot in UpdatePhysics() (and it's better to add this code there, storying conveyor bodies in the globals struct)
+            if (axis==0) velocity[axis] = -0.5f+1.5f*sinf(c->user.f32[1]);   // first conveyor belt (CONVEYOR_BELT_X)
+            else if (axis==2) velocity[axis] = 1.f*sinf(c->user.f32[1]);    // second conveyor belt (CONVEYOR_BELT_Z)
+        }
+        // end loop exploiting... back to basic drawing of all bodies
+        //-----------------------------------------------------------
 
         const bool is_dynamic = filter->flags&BF_IS_DYNAMIC;
         const int is_sleeping_and_dynamic = c->bodies.idle_counters[body]==0xFF && is_dynamic;num_sleeping_and_dynamic+=(is_sleeping_and_dynamic?1:0);
         const int has_com_offset = filter->flags&BF_HAS_COM_OFFSET;
 
-        const BodyInfo* info = &c->bodies.infos[body];   // BodyInfo hosts our custom per-body (user-side) data (in this example the SHAPE_ enum and the COLOR_ enum)
-        assert(info->userUint16[1]<COLOR_COUNT);// we have stuffed the per-body color enum in info->userUint16[1]
+        assert(info->user.u16[1]<COLOR_COUNT);// we have stuffed the per-body color enum in info->userUint16[1]
         ColorEnum color = (ColorEnum) bodyinfo_get_color_enum(info);
         if (color==COLOR_NONE) color = (ColorEnum) (1+(body%(COLOR_COUNT-1))); // (persistent) random body color
-        const ShapeEnum shape = bodyinfo_get_shape_enum(info);
 
-        const BodyLayout* layout = &c->bodies.layouts[body];	// BodyLayout hosts the indices of the body colliders (i.e. collision shapes). The global arrays of colliders are in c->colliders.boxes and c->colliders.spheres
-        glPushMatrix();
+
         if (use_graphic_transform)	{
             // Use use_graphic_transform=1 in release mode, where you have a single graphic mesh
             // (simulated using 1 or more boxes/spheres). We end up having a single smoothed
             // transform per body, and we use it to draw our graphic mesh.
 
-            calculate_graphic_transform_for_body(c,body,mMatrix);	// what this does is: 1) smoothes the graphic transform (using DeltaTimes less than timeStep)
+            calculate_graphic_transform_for_body(c,body,mMatrix);	// what this does is: 1) smoothes the graphic transform (using DeltaTimes less than timeStep); 2) embeds the center of mass offset (so that it can be stripped from the aabb later [*])
+
+            // frustum culling on mMatrix here
+            const float* aabb_hextents = info->aabb_half_extents;   // 3-floats array
+            const float aabb_center[3] = {info->aabb_center[0]+info->com_offset[0],info->aabb_center[1]+info->com_offset[1],info->aabb_center[2]+info->com_offset[2]};  // here we strip the comOffset from aabb_center, because we're culling on a mMatrix that embeds it already [*]
+            if (globals.use_frustum_culling && !glIsAabbVisible(mMatrix,aabb_center[0],aabb_center[1],aabb_center[2],aabb_hextents[0],aabb_hextents[1],aabb_hextents[2])) {
+                filter->flags|=BF_IS_FRUSTUM_CULLED;
+                ++globals.num_frustum_culled_bodies;
+                continue;
+            }
+            // end frustum culling on mMatrix
 
             // experiment (to remove) ------
             if ((filter->flags&BF_IS_CHARACTER) && globals.fix_character_sinking_effect_on_fall && info->aux_bodies[0]>=0)
                 CharacterControllerFixSinkingEffectOnFall(body,mMatrix,info->aux_bodies[0]);  // [experimental] attempt to mitigate the 'sinking effect' of characters after a jump or a fall
             // -----------------------------
 
+            glPushMatrix();
+
             // 2) inglobes the com_offset (if present), so that we should not manually translate our graphic mesh
             glMultMatrixf(mMatrix);
 
+
+            // Now we just add our custom code to draw our graphic body (= the graphic representation of the body)
+            // => here we don't retrieve any physic quantity at all to determine the scaling we must apply
+            // => instead we retrieve the shape axis aligned bounding box extents (inside BodyInfo), which is a geometric quantity, in a suitable format
+            //    Note that that quantity is NOT a physic quantity, because it's NOT USED by nudge.h at all (it was added just for user convenience)
+
+            // Note that here we don't use info->aabb_center at all to draw the body
+            // Here in our case the sum (info->aabb_center+info->com_offset) is always nearly {0,0,0}: this sum is the aabb center we have introduced in add_compund(...) calls, stripped by (=regardless of) the center of mass offset ([*])
+            // In any case, even if the sum is not zero, normally we should just skip it when drawing the geometry, if our graphic mesh has the same aabb center (it should be true when we build the colliders to cover a predefined mesh).
+            // In case of graphic center mismatches I suggest to: 1) center the mesh built with add_compound(...), using last argument, or 2) Calculate (info->aabb_center+info->com_offset) and use it when redering the graphic body.
+
             glColorEnum(color); // internally this calls glColor3fv(...)
 
-            // Now we just add our custom code to draw our graphic body
-            // => but here we still retrieve some physic quantity to determine the scaling we must apply...
-            // => not a good practice AT ALL!, because it's a graphic data that should be stored in user
-            //    variables when we bind the body
-            // => expecially important because in nudge we CANNOT retrieve the aabb (axis aligned bounding box) of each body
             switch (shape) {
-            case SHAPE_BOX: {
-                assert(layout->num_boxes>0);assert(layout->first_box_index>=0);
-                const BoxCollider* coll = &c->colliders.boxes.data[layout->first_box_index];
-                glScalef(coll->size[0],coll->size[1],coll->size[2]);
-                drawShape(SHAPE_BOX);
-            }
-                break;
-            case SHAPE_SPHERE: {
-                assert(layout->num_spheres>0);assert(layout->first_sphere_index>=0);
-                const SphereCollider* coll = &c->colliders.spheres.data[layout->first_sphere_index];
-                glScalef(coll->radius,coll->radius,coll->radius);
-                drawShape(SHAPE_SPHERE);
-            }
-                break;
+            case SHAPE_BOX:
+            case SHAPE_SPHERE:
+            case SHAPE_ROOF:
             case SHAPE_CYLINDER_Y:
             case SHAPE_CYLINDER_Z:
+            case SHAPE_CONE_Y:
+            case SHAPE_SKITTLE:
+            case SHAPE_TEAPOT:
+            case SHAPE_STAR:
+            case SHAPE_CHARACTER:
+            {
+                glScalef(aabb_hextents[0],aabb_hextents[1],aabb_hextents[2]);
+                drawShape(shape);
+            }
+                break;
             case SHAPE_CAPSULE_Y:
             case SHAPE_CAPSULE_Z: {
-                assert(layout->num_boxes>0);assert(layout->first_box_index>=0);
-                const BoxCollider* coll = &c->colliders.boxes.data[layout->first_box_index];
-                const SphereCollider* scoll = layout->first_sphere_index>=0 ? &c->colliders.spheres.data[layout->first_sphere_index] : NULL;
                 float scale[3]={1,1,1};
                 float radius = 1,hheight = 1;
-                if (shape==SHAPE_CYLINDER_Z || shape==SHAPE_CAPSULE_Z) {
-                    if (!scoll && layout->num_boxes>1 && shape==SHAPE_CYLINDER_Z) radius = coll->size[0]/cos(M_PI/(float)layout->num_boxes);
-                    else radius = scoll?scoll->radius:(coll->size[0]+coll->size[1])*0.5f;
-                    hheight = coll->size[2]*2.0;
-                    scale[0]=radius;
-                    scale[1]=radius;
-                    scale[2]=hheight;
+                if (shape==SHAPE_CAPSULE_Z) {
+                    radius = (aabb_hextents[0]+aabb_hextents[1])*0.5f;hheight = aabb_hextents[2];assert(hheight>=radius);hheight-=radius;
+                    scale[0]=radius;scale[1]=radius;scale[2]=hheight;
                 }
-                else if (shape==SHAPE_CYLINDER_Y || shape==SHAPE_CAPSULE_Y) {
-                    if (!scoll && layout->num_boxes>1 && shape==SHAPE_CYLINDER_Z) radius = coll->size[0]/cos(M_PI/(float)layout->num_boxes);
-                    else radius = scoll?scoll->radius:(coll->size[0]+coll->size[2])*0.5f;
-                    hheight = coll->size[1]*2.0;
-                    scale[0]=radius;
-                    scale[1]=hheight;
-                    scale[2]=radius;
+                else if (shape==SHAPE_CAPSULE_Y) {
+                    radius = (aabb_hextents[0]+aabb_hextents[2])*0.5f;hheight = aabb_hextents[1];assert(hheight>=radius);hheight-=radius;
+                    scale[0]=radius;scale[1]=hheight;scale[2]=radius;
                 }
                 glPushMatrix();
                 glScalef(scale[0],scale[1],scale[2]);
                 drawShape(shape);
                 glPopMatrix();
-                if (shape==SHAPE_CAPSULE_Y || shape==SHAPE_CAPSULE_Z) {
-                    // capsules are bad shapes to render, because (like torii) they cannot be non-uniformly scaled.
-                    // Unlike torii we can still combine display lists to draw them.
-                    // so basically drawShape(SHAPE_CAPSULE) just draws the lateral surface,
-                    // and now we must add the 2 (half) spheres
-                    const float deltaZ = (0.5*hheight/radius);
-                    glPushMatrix();
-                    if (shape==SHAPE_CAPSULE_Y) glRotatef(-90.f,1,0,0);
-                    else glScalef(radius,radius,radius);
-                    glTranslatef(0,0,deltaZ);
-                    drawShape(SHAPE_SPHERE_LOW_POLY);
-                    glTranslatef(0,0,-2.f*deltaZ);
-                    drawShape(SHAPE_SPHERE_LOW_POLY);
-                    glPopMatrix();
-                }
+
+                // capsules are bad shapes to render, because (like torii) they cannot be non-uniformly scaled.
+                // However, unlike torii, we can still combine display lists to draw them.
+                // so basically drawShape(SHAPE_CAPSULE) just draws the cylinder lateral surface,
+                // and now we must add the 2 (half) spheres
+                const float deltaZ = (hheight/radius);
+                glPushMatrix();
+                if (shape==SHAPE_CAPSULE_Y) glRotatef(-90.f,1,0,0);
+                glScalef(radius,radius,radius);
+                glTranslatef(0,0,deltaZ);
+                drawShape(SHAPE_SPHERE_LOW_POLY);
+                glTranslatef(0,0,-2.f*deltaZ);
+                drawShape(SHAPE_SPHERE_LOW_POLY);
+                glPopMatrix();
+
             }
                 break;
             case SHAPE_TORUS_Y:
-            case SHAPE_TORUS_Z:
-            case SHAPE_HOLLOW_CYLINDER_Y:
-            case SHAPE_HOLLOW_CYLINDER_Z: {
-                assert(layout->num_boxes>0);assert(layout->first_box_index>=0);
-                const BoxCollider* coll = &c->colliders.boxes.data[layout->first_box_index];
-                const Transform* T = &c->colliders.boxes.transforms[layout->first_box_index];
-                float scaleXY,scaleH;
-                if (shape==SHAPE_TORUS_Z || shape==SHAPE_HOLLOW_CYLINDER_Z) {
-                    scaleXY = -T->p[1]+coll->size[1];assert(T->p[1]<0);
-                    scaleH = shape==SHAPE_TORUS_Z ? scaleXY : coll->size[2];
-                    glScalef(scaleXY,scaleXY,scaleH);
-                }
-                else if (shape==SHAPE_TORUS_Y || shape==SHAPE_HOLLOW_CYLINDER_Y)    {
-                    scaleXY = -T->p[2]+coll->size[2];assert(-T->p[2]>0);
-                    scaleH = shape==SHAPE_TORUS_Y ? scaleXY : coll->size[1];
-                    glScalef(scaleXY,scaleH,scaleXY);
-                }
+            case SHAPE_TORUS_Z: {
+                const float uniform_scale = (shape==SHAPE_TORUS_Y)?(aabb_hextents[0]+aabb_hextents[2])*0.5f:(aabb_hextents[0]+aabb_hextents[1])*0.5f;
+                glScalef(uniform_scale,uniform_scale,uniform_scale);
                 drawShape(shape);
             }
                 break;
-            case SHAPE_ROOF: {
-                assert(layout->num_boxes>0);assert(layout->first_box_index>=0);
-                const BoxCollider* coll = &c->colliders.boxes.data[layout->first_box_index];
-                glScalef(coll->size[0],coll->size[1],coll->size[2]);
-                drawShape(SHAPE_ROOF);
-            }
-                break;
-            case SHAPE_SKITTLE: {
-                // hsize: 0.225f,0.75f,0.225f
-                assert(layout->num_boxes>0);assert(layout->first_box_index>=0);
-                const BoxCollider* coll = &c->colliders.boxes.data[layout->first_box_index];
-                glScalef(coll->size[0]*2.f,coll->size[1],coll->size[2]*2.f);
-                drawShape(SHAPE_SKITTLE);
-            }
-                break;
-            case SHAPE_TEAPOT: {
-                assert(layout->num_boxes>0);assert(layout->first_box_index>=0);
-                const BoxCollider* coll = &c->colliders.boxes.data[layout->first_box_index];
-                glScalef(coll->size[0],coll->size[1],coll->size[2]);
-                drawShape(SHAPE_TEAPOT);
-            }
-                break;
-            case SHAPE_CHARACTER: {
-                assert(layout->num_boxes>0);assert(layout->first_box_index>=0);
-                const BoxCollider* coll = &c->colliders.boxes.data[layout->first_box_index];
-                glScalef(coll->size[0],coll->size[1],coll->size[2]);
-                drawShape(SHAPE_CHARACTER);
+            case SHAPE_HOLLOW_CYLINDER_Y:
+            case SHAPE_HOLLOW_CYLINDER_Z: {
+                const float lateral_scale = (shape==SHAPE_HOLLOW_CYLINDER_Y)?(aabb_hextents[0]+aabb_hextents[2])*0.5f:(aabb_hextents[0]+aabb_hextents[1])*0.5f;
+                float scale[3]={lateral_scale,lateral_scale,lateral_scale};
+                if (shape==SHAPE_HOLLOW_CYLINDER_Y) scale[1]=aabb_hextents[1];
+                else scale[2]=aabb_hextents[2];
+                glScalef(scale[0],scale[1],scale[2]);
+                drawShape(shape);
             }
                 break;
             case SHAPE_NONE:
@@ -1019,11 +1119,33 @@ void DrawPhysics()  {
                 assert(0); // SHAPE_XXX not handled
                 break;
             }
+
+            glPopMatrix();
         }
         else {
             // Use use_graphic_transform=0 in debug mode, where you don't have a graphic mesh
             // or you want to see all the boxes/spheres that make up the body.
             // The transforms here are not smoothed.
+            // Here we must use the physic layout of the body (the one used by nudge.h)
+
+            const Transform* T1 = &c->bodies.transforms[body];
+            if (globals.use_frustum_culling) {
+                // frustum culling on T1 here
+
+                // (1)
+                // First off, here we're culling on T1 that does not embed the com_offset, so we don't need to strip it from the aabb_center [*]
+                // However here we should do a 'TransformToMat4(...)', where the resulting matrix is not needed elsewhere...
+                /*float mMatrix[16];TransformToMat4(mMatrix,T1);
+                if (!glIsAabbVisible(mMatrix,info->aabb_center[0],info->aabb_center[1],info->aabb_center[2],info->aabb_half_extents[0],info->aabb_half_extents[1],info->aabb_half_extents[2])) {filter->flags|=BF_IS_FRUSTUM_CULLED;++globals.num_frustum_culled_bodies;continue;}*/
+
+                // or (2)
+                // Now nudge.h provides an 'aabb_enlarged_radius' that 'covers' the aabb_center so that we can skip the rotation part of T1 completely and still do frustum culling
+                // However: a) the culling is slightly broader b) it's not much faster than the other glIsAabbVisible(...) c) I don't know if it can be applied when com_offset is embedded in T1 (to test)
+                // Short story: good to use it here, but when we need a mMatrix[16] for something else (e.g. drawing the mesh), we must always use the other glIsAabbVisible(...)
+                if (!glIsAabbVisible(T1->p,info->aabb_enlarged_radius)) {filter->flags|=BF_IS_FRUSTUM_CULLED;++globals.num_frustum_culled_bodies;continue;}
+
+                // end frustum culling on T1
+            }
 
             if (is_dynamic) {
                 if (c->active_bodies.count==0) color = no_active_body_color;
@@ -1032,7 +1154,7 @@ void DrawPhysics()  {
             }
             glColorEnum(color); // internally this calls glColor3fv(...)
 
-            const Transform* T1 = &c->bodies.transforms[body];
+            const BodyLayout* layout = &c->bodies.layouts[body];	// BodyLayout hosts the indices of the body colliders (i.e. collision shapes). The global arrays of colliders are in c->colliders.boxes and c->colliders.spheres
             if (layout->num_boxes>0) {
                 assert(layout->first_box_index>=0);
                 assert((uint16_t)layout->first_box_index+layout->num_boxes<=c->colliders.boxes.count);
@@ -1065,22 +1187,96 @@ void DrawPhysics()  {
             }
 
         }
+    }
+
+
+    // Draw aabb of selected body (RMB)
+    const globals_t::selection_t* selected = &globals.selection;
+    if (selected->body<c->bodies.count && !(c->bodies.filters[selected->body].flags&(BF_IS_DISABLED_OR_REMOVED|BF_IS_FRUSTUM_CULLED))) {
+        const unsigned body = selected->body;
+        const BodyInfo* info = &c->bodies.infos[body];
+        const float* aabb_hextents = info->aabb_half_extents;   // 3-floats array
+        const float* aabb_center = info->aabb_center;   // 3-floats array (note that here we don't have to strip info->comOffset: we should when using calculate_graphic_transform_for_body(...) to get mMatrix)
+        float mMatrix[16];TransformToMat4(mMatrix,&c->bodies.transforms[body]);
+
+        glLineWidth(4.f);
+        glDisable(GL_LIGHTING);
+        glColor3f(0.4f,0.0f,0.0f);
+        glPushMatrix();
+        glMultMatrixf(mMatrix);
+        glTranslatef(aabb_center[0],aabb_center[1],aabb_center[2]); // optional
+        glScalef(aabb_hextents[0],aabb_hextents[1],aabb_hextents[2]);
+        drawShape(SHAPE_AABB);
         glPopMatrix();
 
-
-        //------------------------------------------------------------
-        // we exploit this loop to remove fallen bodies
-        // so that their colliders (i.e. collision shapes) are freed
-        // and the body indices are reusable by nudge::add_ (this happens automatically)
-        Transform* T = &c->bodies.transforms[body];
-        if (T->p[1]<-40.f && filter->flags&BF_IS_DYNAMIC) {
-            // here we just remove (graphic) boxes and spheres, and respawn other bodies
-            if ((shape==SHAPE_BOX || shape==SHAPE_SPHERE) && !(filter->flags&(BF_IS_CHARACTER|BF_IS_PLATFORM))) remove_body(c,body);
-            else {T->p[0]=0.f;T->p[1]=20.f;T->p[2]=0.0f;}
+        // Optional: draw aabb of selected collider inside selected body
+        const BodyLayout* L = &c->bodies.layouts[body];
+        if (L->num_boxes+L->num_spheres>1)  {
+            glColor3f(0.0f,0.4f,0.0f);
+            if (selected->box_relative_index>=0 && selected->box_relative_index<L->num_boxes) {
+                const uint16_t idx = (uint16_t)L->first_box_index+selected->box_relative_index;
+                assert(L->first_box_index>=0 && idx<c->colliders.boxes.count);
+                const float* he = c->colliders.boxes.data[idx].size;
+                const Transform T = TransformMul(c->bodies.transforms[body],c->colliders.boxes.transforms[idx]);
+                TransformToMat4(mMatrix,&T);
+                glPushMatrix();
+                glMultMatrixf(mMatrix);
+                glScalef(he[0]*1.05f,he[1]*1.05f,he[2]*1.05f);  // scaling to avoid z-fighting
+                drawShape(SHAPE_AABB);
+                glPopMatrix();
+            }
+            if (selected->sphere_relative_index>=0 && selected->sphere_relative_index<L->num_spheres) {
+                const uint16_t idx = (uint16_t)L->first_sphere_index+selected->sphere_relative_index;
+                assert(L->first_sphere_index>=0 && idx<c->colliders.spheres.count);
+                const float r = c->colliders.spheres.data[idx].radius;const float he[3]={r,r,r};
+                const Transform T = TransformMul(c->bodies.transforms[body],c->colliders.spheres.transforms[idx]);
+                TransformToMat4(mMatrix,&T);
+                glPushMatrix();
+                glMultMatrixf(mMatrix);
+                glScalef(he[0]*1.05f,he[1]*1.05f,he[2]*1.05f);  // scaling to avoid z-fighting
+                drawShape(SHAPE_AABB);
+                glPopMatrix();
+            }
         }
-        //-----------------------------------------------------------
+        glEnable(GL_LIGHTING);
     }
-    glPopMatrix();
+
+
+    // Dbg: draw another aabb on c->active_bodies (for better understanding what this array is)
+    const int dbg_draw_aabb_around_bodies_in_the_active_array = 0;
+    if (dbg_draw_aabb_around_bodies_in_the_active_array
+            && !globals.use_graphic_transform
+            )
+    {
+        glLineWidth(1.f);
+        glDisable(GL_LIGHTING);
+        glColor3f(0.8f,0.8f,0.8f);
+        for (unsigned i=0;i<c->active_bodies.count;i++) {
+            const unsigned body = c->active_bodies.indices[i];
+            if (c->bodies.filters[body].flags&BF_IS_FRUSTUM_CULLED) continue;
+            const BodyInfo* info = &c->bodies.infos[body];
+            const float* aabb_hextents = info->aabb_half_extents;   // 3-floats array
+            const float* aabb_center = info->aabb_center;   // 3-floats array (note that here we don't have to strip info->comOffset: we should when using calculate_graphic_transform_for_body(...) to get mMatrix)
+            float mMatrix[16];TransformToMat4(mMatrix,&c->bodies.transforms[body]);
+
+            glPushMatrix();
+            glMultMatrixf(mMatrix);
+            glTranslatef(aabb_center[0],aabb_center[1],aabb_center[2]); // optional
+            glScalef(aabb_hextents[0],aabb_hextents[1],aabb_hextents[2]);
+            drawShape(SHAPE_AABB);
+            glPopMatrix();
+        }
+        glEnable(GL_LIGHTING);
+        glprintf("Active_bodies:%u\n",c->active_bodies.count);
+    }
+    // Dbg result:
+    /* It seems that all the bodies of any active island are placed in the active_bodies arrays (regardless of their sleeping state)
+     * So static and kinematic bodies are in the active_bodies array (='activate' from now on) when there is at least a non-sleeping dynamic body that touches them
+     * Interesting to note:
+     * 1) the moving kinematic teapot 'activates' only during collision time;
+     * 2) going around with the character we can see how kinamatic (and static) grounds/platforms 'activate' as the character walks on it
+     */
+    // End Dbg
 }
 
 void glGetThrowBodyMatrixAtMouseCoordsfv(GLfloat* mMatrixOut,int mouseX,int mouseY); // forward declaration of internal function
@@ -1131,6 +1327,7 @@ void ThrowBodyAtMousePos(int x, int y) {
     }
 }
 void DestroyGL(void);   // forward declaration
+uint16_t glGetNudgeBodyAtMouseCoords(nudge::context_t* c,int mouseX,int mouseY,int16_t* pRelativeBoxColliderIndexOut=NULL,int16_t* pRelativeSphereColliderIndexOut=NULL,float* pOptionalDistanceOut=NULL); // forward declaration
 void HandleKeys(void) {
     const globals_t::key_t* key = &globals.key;
 
@@ -1159,6 +1356,7 @@ void HandleKeys(void) {
             return;
         }
         if (key->pressed&KEY_SPACE) globals.use_graphic_transform = !globals.use_graphic_transform; /* switch draw mode */
+        if (key->pressed&KEY_F) globals.use_frustum_culling = !globals.use_frustum_culling; /* toggle frustum culling */
         if (key->pressed&(KEY_F5|KEY_F7)) {
             // quick save/load simulation
             const char* filename = "example02.sav"; // ascii only please
@@ -1168,11 +1366,15 @@ void HandleKeys(void) {
                 if (save) {
                     nudge::save_context(f,c);
                     // we append some fields in the 'globals' struct
+                    fwrite(&globals.selection,sizeof(globals_t::selection_t),1,f);
                     fprintf(f,"\nkinematic_body: %u",globals.kinematic_body);
                     fprintf(f,"\ncharacter_body: %u",globals.character_body);
+                    fprintf(f,"\nstar_body: %u",globals.star_body);
+                    fprintf(f,"\nnum_stars: %u",globals.num_stars);
                     fprintf(f,"\nfix_character_sinking_effect_on_fall: %u",globals.fix_character_sinking_effect_on_fall);
                     fprintf(f,"\nuse_graphic_transform: %u",globals.use_graphic_transform);
                     fprintf(f,"\nuse_character_camera: %u",globals.use_character_camera);
+                    fprintf(f,"\nuse_frustum_culling: %u",globals.use_frustum_culling);
                     fwrite(&globals.gui,sizeof(globals.gui),1,f);
                     fwrite(&globals.camera[0],sizeof(globals.camera[0]),2,f);
                     nudge::log("Saved \"%s\"\n",filename);
@@ -1180,11 +1382,15 @@ void HandleKeys(void) {
                 else {
                     nudge::load_context(f,c);
                     // we append some fields in the 'globals' struct
-                    int cnt=fscanf(f,"\nkinematic_body: %u",&globals.kinematic_body);assert(cnt==1);
+                    int cnt=fread(&globals.selection,sizeof(globals_t::selection_t),1,f);assert(cnt==1);
+                    cnt=fscanf(f,"\nkinematic_body: %u",&globals.kinematic_body);assert(cnt==1);
                     cnt=fscanf(f,"\ncharacter_body: %u",&globals.character_body);assert(cnt==1);
+                    cnt=fscanf(f,"\nstar_body: %u",&globals.star_body);assert(cnt==1);
+                    cnt=fscanf(f,"\nnum_stars: %u",&globals.num_stars);assert(cnt==1);
                     cnt=fscanf(f,"\nfix_character_sinking_effect_on_fall: %u",&globals.fix_character_sinking_effect_on_fall);assert(cnt==1);
                     cnt=fscanf(f,"\nuse_graphic_transform: %u",&globals.use_graphic_transform);assert(cnt==1);
                     cnt=fscanf(f,"\nuse_character_camera: %u",&globals.use_character_camera);assert(cnt==1);
+                    cnt=fscanf(f,"\nuse_frustum_culling: %u",&globals.use_frustum_culling);assert(cnt==1);
                     cnt = fread(&globals.gui,sizeof(globals.gui),1,f);assert(cnt==1);
                     cnt = fread(&globals.camera[0],sizeof(globals.camera[0]),2,f);assert(cnt==2);
                     nudge::log("Loaded \"%s\"\n",filename);
@@ -1199,7 +1405,9 @@ void HandleKeys(void) {
         }
         if (key->pressed&KEY_MOUSE_BUTTON_LEFT) ThrowBodyAtMousePos(key->mouseX,key->mouseY);  /* add a body and throw it */
         if (key->pressed&(KEY_MOUSE_BUTTON_MIDDLE|KEY_ENTER|KEY_END)) globals.use_character_camera=!globals.use_character_camera;
+        if (key->pressed&KEY_MOUSE_BUTTON_RIGHT) globals.selection.body = glGetNudgeBodyAtMouseCoords(c,key->mouseX,key->mouseY,&globals.selection.box_relative_index,&globals.selection.sphere_relative_index);
     }
+    //else if (key->down&KEY_SHIFT) {if (key->pressed&KEY_SPACE) {const float* p=c->bodies.transforms[globals.character_body].p;nudge::log("%1.2f,%1.2f,%1.2f,\n",p[0],p[1]+0.65f,p[2]);nudge::flush();}}
 
     // camera movement keys
     if (globals.gui.menu_idx!=2)    {
@@ -1348,7 +1556,7 @@ void DrawGL() {
             if (fading_alpha>0.01f) {
                 glDisable(GL_LIGHTING);
                 glPushMatrix();glMultMatrixf(mMatrix);glScalef(1.5f,1.5f,1.5f);glEnable(GL_BLEND);
-                //glColor4f(1,1,1,fading_effect);drawShape(SHAPE_PIVOT3D); // nope: we can't use blending, because SHAPE_PIVOT3D in its displaylist has hard-coded opaque glColor3f, we must split the call
+                //glColor4f(1,1,1,fading_effect);drawShape(SHAPE_PIVOT3D); // nope: we can't use blending, because SHAPE_PIVOT3D in its display list has hard-coded opaque glColor3f, we must split the call
                 glColor4f(1,1,1,fading_alpha);drawShape(SHAPE_PIVOT3D_CENTER);
                 glColor4f(1,0,0,fading_alpha);drawShape(SHAPE_PIVOT3D_AXIS_X);
                 glColor4f(0,1,0,fading_alpha);drawShape(SHAPE_PIVOT3D_AXIS_Y);
@@ -1408,7 +1616,9 @@ void updateCameraPos() {
     if (smooth_camera) {
         assert(globals.character_body<c->bodies.count);
         static float oldCameraPos[3]={},oldTargetPos[3]={};
-        static unsigned last_camera_mode=100;const bool skip_lerp = last_camera_mode!=globals.use_character_camera;last_camera_mode = globals.use_character_camera;
+        static unsigned last_camera_mode=100;
+        const bool skip_lerp = (last_camera_mode!=globals.use_character_camera) || (globals.use_character_camera==0 && (globals.key.pressed&(KEY_HOME|KEY_F7)));
+        last_camera_mode = globals.use_character_camera;
         const float lerp_constant = globals.use_character_camera ? 2.f : 30.f;  // bigger number = less lerp = mitigation of sickness
         float time = globals.instantFrameTime*lerp_constant;if (time>1) time=1;
         for (int i=0;i<3;i++) {
@@ -1423,7 +1633,12 @@ void updateCameraPos() {
 }
 
 // see KeyMask at the top
-static const unsigned char Keys[] = {'w','a','s','d','j',' ','r',27,13,'h','m'};
+#ifdef AZERTY_KEYBOARD_LAYOUT
+#   define WASD_KEYS 'z','q','s','d'
+#else
+#   define WASD_KEYS 'w','a','s','d'
+#endif
+static const unsigned char Keys[] = {WASD_KEYS,'j',' ','r',27,13,'h','m','f'};
 static const int ModifierKeys[] = {GLUT_ACTIVE_SHIFT,GLUT_ACTIVE_CTRL,GLUT_ACTIVE_ALT};
 static const int SpecialKeys[] = {GLUT_KEY_LEFT,GLUT_KEY_RIGHT,GLUT_KEY_UP,GLUT_KEY_DOWN,
                                      GLUT_KEY_PAGE_UP,GLUT_KEY_PAGE_DOWN,GLUT_KEY_HOME,GLUT_KEY_END,
@@ -1510,9 +1725,16 @@ int main(int argc, const char* argv[]) {
 
 // internal functions here
 
+void nm_Mat4Identity(float* m) {memset(m,0,16*sizeof(float));m[0]=m[5]=m[10]=m[15]=1.f;}
+struct gl_matrices_t {
+    float vMatrix[16],pMatrix[16],vpMatrix[16];  // these have been explicitely kept to calculate other quantities
+    float vpMatrixInv[16];  // this is necessary for throwing/selecting bodies
+    float frustumPlanes[6][4];      // this is necessary for frustum culling
+} glmatrices = {};
+
 void glPerspective(float degfovy,float aspect, float zNear, float zFar) {
     // custom replacement of gluPerspective(...)
-    float res[16];
+    float* res=glmatrices.pMatrix;
     const float eps = 0.0001f;
     float f = 1.f/tan(degfovy*1.5707963268f/180.0); //cotg
     float Dfn = (zFar-zNear);
@@ -1539,53 +1761,7 @@ void glPerspective(float degfovy,float aspect, float zNear, float zFar) {
     res[14] = -2.f*zFar*zNear/Dfn;
     res[15] = 0;
 
-    glMultMatrixf(res);
-}
-void glLookAt(float eyeX, float eyeY, float eyeZ, float centerX, float centerY, float centerZ, float upX, float upY, float upZ)    {
-    // custom replacement of gluLookAt(...)
-    float m[16];
-    const float eps = 0.0001f;
-
-    float F[3] = {eyeX-centerX,eyeY-centerY,eyeZ-centerZ};
-    float length = F[0]*F[0]+F[1]*F[1]+F[2]*F[2];	// length2 now
-    float up[3] = {upX,upY,upZ};
-
-    float S[3] = {up[1]*F[2]-up[2]*F[1],up[2]*F[0]-up[0]*F[2],up[0]*F[1]-up[1]*F[0]};
-    float U[3] = {F[1]*S[2]-F[2]*S[1],F[2]*S[0]-F[0]*S[2],F[0]*S[1]-F[1]*S[0]};
-
-    if (length==0) length = eps;
-    length = sqrt(length);
-    F[0]/=length;F[1]/=length;F[2]/=length;
-
-    length = S[0]*S[0]+S[1]*S[1]+S[2]*S[2];if (length==0) length = eps;
-    length = sqrt(length);
-    S[0]/=length;S[1]/=length;S[2]/=length;
-
-    length = U[0]*U[0]+U[1]*U[1]+U[2]*U[2];if (length==0) length = eps;
-    length = sqrt(length);
-    U[0]/=length;U[1]/=length;U[2]/=length;
-
-    m[0] = S[0];
-    m[1] = U[0];
-    m[2] = F[0];
-    m[3]= 0;
-
-    m[4] = S[1];
-    m[5] = U[1];
-    m[6] = F[1];
-    m[7]= 0;
-
-    m[8] = S[2];
-    m[9] = U[2];
-    m[10]= F[2];
-    m[11]= 0;
-
-    m[12] = -S[0]*eyeX -S[1]*eyeY -S[2]*eyeZ;
-    m[13] = -U[0]*eyeX -U[1]*eyeY -U[2]*eyeZ;
-    m[14]= -F[0]*eyeX -F[1]*eyeY -F[2]*eyeZ;
-    m[15]= 1;
-
-    glMultMatrixf(m);
+    glLoadMatrixf(res);
 }
 int nm_Mat4Invert(float* mOut16,const float* m16)	{
     const float* m = m16;
@@ -1656,6 +1832,77 @@ int nm_Mat4Invert(float* mOut16,const float* m16)	{
     }
     return 1;
 }
+void glGetFrustumPlaneEquations(float planeEquationsOut[6][4],const float* __restrict vpMatrix16/*,int normalizePlanes*/)  {
+    // ax+by+cz+d=0 [xl,xr,yb,yt,zn,zf],normalizePlanes=0 -> no normalization
+    float m00 = vpMatrix16[0], m01 = vpMatrix16[4], m02 = vpMatrix16[8],  m03 = vpMatrix16[12];
+    float m10 = vpMatrix16[1], m11 = vpMatrix16[5], m12 = vpMatrix16[9],  m13 = vpMatrix16[13];
+    float m20 = vpMatrix16[2], m21 = vpMatrix16[6], m22 = vpMatrix16[10], m23 = vpMatrix16[14];
+    float m30 = vpMatrix16[3], m31 = vpMatrix16[7], m32 = vpMatrix16[11], m33 = vpMatrix16[15];
+    float* p = NULL;
+    p = &planeEquationsOut[0][0];   // Left
+    p[0] = m30+m00; p[1] = m31+m01; p[2] = m32+m02; p[3] = m33+m03;
+    p = &planeEquationsOut[1][0];   // Right
+    p[0] = m30-m00; p[1] = m31-m01; p[2] = m32-m02; p[3] = m33-m03;
+    p = &planeEquationsOut[2][0];   // Bottom
+    p[0] = m30+m10; p[1] = m31+m11; p[2] = m32+m12; p[3] = m33+m13;
+    p = &planeEquationsOut[3][0];   // Top
+    p[0] = m30-m10; p[1] = m31-m11; p[2] = m32-m12; p[3] = m33-m13;
+    p = &planeEquationsOut[4][0];   // Near
+    p[0] = m30+m20; p[1] = m31+m21; p[2] = m32+m22; p[3] = m33+m23;
+    p = &planeEquationsOut[5][0];   // Far
+    p[0] = m30-m20; p[1] = m31-m21; p[2] = m32-m22; p[3] = m33-m23;
+    //if (normalizePlanes) {int i;for (i=0;i<6;i++) IMPlaneNormalize(&planeEquationsOut[i][0]);}
+}
+void glLookAt(float eyeX, float eyeY, float eyeZ, float centerX, float centerY, float centerZ, float upX, float upY, float upZ)    {
+    // custom replacement of gluLookAt(...)
+    float* m=glmatrices.vMatrix;
+    const float eps = 0.0001f;
+
+    float F[3] = {eyeX-centerX,eyeY-centerY,eyeZ-centerZ};
+    float length = F[0]*F[0]+F[1]*F[1]+F[2]*F[2];	// length2 now
+    float up[3] = {upX,upY,upZ};
+
+    float S[3] = {up[1]*F[2]-up[2]*F[1],up[2]*F[0]-up[0]*F[2],up[0]*F[1]-up[1]*F[0]};
+    float U[3] = {F[1]*S[2]-F[2]*S[1],F[2]*S[0]-F[0]*S[2],F[0]*S[1]-F[1]*S[0]};
+
+    if (length==0) length = eps;
+    length = sqrt(length);
+    F[0]/=length;F[1]/=length;F[2]/=length;
+
+    length = S[0]*S[0]+S[1]*S[1]+S[2]*S[2];if (length==0) length = eps;
+    length = sqrt(length);
+    S[0]/=length;S[1]/=length;S[2]/=length;
+
+    length = U[0]*U[0]+U[1]*U[1]+U[2]*U[2];if (length==0) length = eps;
+    length = sqrt(length);
+    U[0]/=length;U[1]/=length;U[2]/=length;
+
+    m[0] = S[0];
+    m[1] = U[0];
+    m[2] = F[0];
+    m[3]= 0;
+
+    m[4] = S[1];
+    m[5] = U[1];
+    m[6] = F[1];
+    m[7]= 0;
+
+    m[8] = S[2];
+    m[9] = U[2];
+    m[10]= F[2];
+    m[11]= 0;
+
+    m[12] = -S[0]*eyeX -S[1]*eyeY -S[2]*eyeZ;
+    m[13] = -U[0]*eyeX -U[1]*eyeY -U[2]*eyeZ;
+    m[14]= -F[0]*eyeX -F[1]*eyeY -F[2]*eyeZ;
+    m[15]= 1;
+
+    glLoadMatrixf(m);
+
+    nudge::nm_Mat4Mul(glmatrices.vpMatrix,glmatrices.pMatrix,glmatrices.vMatrix);
+    nm_Mat4Invert(glmatrices.vpMatrixInv,glmatrices.vpMatrix);
+    glGetFrustumPlaneEquations(glmatrices.frustumPlanes,glmatrices.vpMatrix);
+}
 int nm_Mat4UnProjectMvpInv(float winX,float winY,float winZ,const float* __restrict mvpMatrixInv16,const int* viewport4,float* __restrict objX,float* __restrict objY,float* __restrict objZ)    {
     const float *invpm = mvpMatrixInv16;
     const float v[4] = {2*(winX-(float)viewport4[0])/(float)viewport4[2]-1,2*(winY-(float)viewport4[1])/(float)viewport4[3]-1,2*winZ-1,1};
@@ -1681,21 +1928,147 @@ void nm_Mat4UnProjectMouseCoords(float* __restrict rayOriginOut3,float* __restri
     }
 }
 void glGetThrowBodyMatrixAtMouseCoordsfv(GLfloat* mMatrixOut,int mouseX,int mouseY) {
-    GLfloat vpMatrixInv[16],*mat=mMatrixOut;const float yAxis[3]={0,1,0};
+    GLfloat *mat=mMatrixOut;const float yAxis[3]={0,1,0};
     GLint viewport[4];glGetIntegerv(GL_VIEWPORT,viewport);
-    glGetFloatv(GL_MODELVIEW_MATRIX,vpMatrixInv);
-    glMatrixMode(GL_PROJECTION);
-    glPushMatrix();
-    glMultMatrixf(vpMatrixInv);
-    glGetFloatv(GL_PROJECTION_MATRIX,vpMatrixInv);
-    glPopMatrix();
-    glMatrixMode(GL_MODELVIEW);
-    nm_Mat4Invert(vpMatrixInv,vpMatrixInv);
-    nm_Mat4UnProjectMouseCoords(&mat[12],&mat[8],mouseX,mouseY,vpMatrixInv,viewport); // gluUnProject4
+    nm_Mat4UnProjectMouseCoords(&mat[12],&mat[8],mouseX,mouseY,glmatrices.vpMatrixInv,viewport); // gluUnProject4
     nudge::nm_Vec3Cross(&mat[0],yAxis,&mat[8]);
     nudge::nm_Vec3Cross(&mat[4],&mat[8],&mat[0]);
     mat[3]=mat[7]=mat[11]=0.f;mat[15]=1.f;
 }
+inline void glGetNudgeBodyAtMouseCoordsFromRayStep(const float* __restrict rayOrigin3,const float* __restrict rayDir3,const nudge::Transform* T,const float* __restrict aabbMin,const float* __restrict aabbMax,
+                                            int* noCollisionDetected,float* tMin) {
+    using namespace nudge;
+    float tMax = (float)1000000000000;
+    float obbPosDelta[3] =  {T->p[0]-rayOrigin3[0],T->p[1]-rayOrigin3[1],T->p[2]-rayOrigin3[2]};
+    float obbMatrix[9];nm_Mat3FromQuat(obbMatrix,T->q);  // costly! Better change this for sure! [float 4x4 matrices are far better to keep than pos+quat (except for slerp), if you're not relying to a framework that does the dirty work for you... we should definitely store all float16 transforms somewhere...]
+    *noCollisionDetected=0;*tMin = 0;
+    for (int j=0;j<3;j++)   {
+        if (!*noCollisionDetected)   {
+            const int j3 = 3*j; const float axis[3] = {obbMatrix[j3],obbMatrix[j3+1],obbMatrix[j3+2]};
+            const float e = nm_Vec3Dot(axis, obbPosDelta), f = nm_Vec3Dot(rayDir3, axis);
+            float t1 = (e+aabbMin[j])/f, t2 = (e+aabbMax[j])/f;
+            if (t1>t2)  {float w=t1;t1=t2;t2=w;}
+            if (t2 < tMax)    tMax = t2;
+            if (t1 > *tMin)    *tMin = t1;
+            if (*tMin > tMax) *noCollisionDetected=1;
+        }
+    }
+}
+uint16_t glGetNudgeBodyAtMouseCoordsFromRay(nudge::context_t* c,const float* __restrict rayOrigin3,const float* __restrict rayDir3,int16_t* pRelativeBoxColliderIndexOut,int16_t* pRelativeSphereColliderIndexOut,float* pOptionalDistanceOut) {
+    // rayOrigin3 and rayDirection3 are in world space
+    using namespace nudge;
+    uint16_t rv = NUDGE_INVALID_BODY_ID;if (pRelativeBoxColliderIndexOut) *pRelativeBoxColliderIndexOut=-1;if (pRelativeSphereColliderIndexOut) *pRelativeSphereColliderIndexOut=-1;
+    float intersection_distance = 0;
+    if (pOptionalDistanceOut) *pOptionalDistanceOut=intersection_distance;
+    if (!c) return rv;
+
+    // Loop all meshes and find OBB vs ray intersection
+    // Code based on: http://www.opengl-tutorial.org/miscellaneous/clicking-on-objects/picking-with-custom-ray-obb-function/ (WTFPL Public Licence)
+    for (unsigned body=0;body<c->bodies.count;body++)   {
+        const BodyFilter* filter = &c->bodies.filters[body];
+        if (filter->flags&(BF_IS_DISABLED_OR_REMOVED|BF_IS_FRUSTUM_CULLED)) continue;
+
+        const Transform* mainT = &c->bodies.transforms[body];
+        const BodyInfo* info = &c->bodies.infos[body];
+        const float aabbMin[3] = {info->aabb_center[0]-info->aabb_half_extents[0],info->aabb_center[1]-info->aabb_half_extents[1],info->aabb_center[2]-info->aabb_half_extents[2]};
+        const float aabbMax[3] = {info->aabb_center[0]+info->aabb_half_extents[0],info->aabb_center[1]+info->aabb_half_extents[1],info->aabb_center[2]+info->aabb_half_extents[2]};
+
+        int noCollisionDetected = 0;float tMin = 0;
+
+        glGetNudgeBodyAtMouseCoordsFromRayStep(rayOrigin3,rayDir3,mainT,aabbMin,aabbMax,&noCollisionDetected,&tMin);
+
+        if (!noCollisionDetected && (intersection_distance<=0 || intersection_distance>tMin))   {
+            //intersection_distance = tMin;rv = body;  // nope, we add an inner per-collider scan to avoid gaps and return inner collisions too
+            // otherwise for simple per-body aabb collisions we should enable line above and comment out the rest of this scope
+
+            const BodyLayout* L = &c->bodies.layouts[body];
+            if (L->num_boxes>0) {
+                assert(L->first_box_index>=0 && (uint16_t)L->first_box_index+L->num_boxes<=c->colliders.boxes.count);
+                const Transform* T = &c->colliders.boxes.transforms[L->first_box_index];
+                const BoxCollider* C = &c->colliders.boxes.data[L->first_box_index];
+                for (uint16_t i=0;i<L->num_boxes;i++) {
+                    const float* he = C[i].size;
+                    const float aabbMin[3]={-he[0],-he[1],-he[2]},aabbMax[3]={he[0],he[1],he[2]};
+                    Transform t = TransformMul(*mainT,T[i]);
+                    int noCollisionDetected = 0;float tMin = 0;
+                    glGetNudgeBodyAtMouseCoordsFromRayStep(rayOrigin3,rayDir3,&t,aabbMin,aabbMax,&noCollisionDetected,&tMin);
+                    if (!noCollisionDetected && (intersection_distance<=0 || intersection_distance>tMin))   {
+                        intersection_distance=tMin;rv=body;
+                        if (pRelativeBoxColliderIndexOut) *pRelativeBoxColliderIndexOut=(int16_t)i;
+                        if (pRelativeSphereColliderIndexOut) *pRelativeSphereColliderIndexOut=-1;
+                    }
+                }
+            }
+            if (L->num_spheres>0) {
+                assert(L->first_sphere_index>=0 && (uint16_t)L->first_sphere_index+L->num_spheres<=c->colliders.spheres.count);
+                const Transform* T = &c->colliders.spheres.transforms[L->first_sphere_index];
+                const SphereCollider* C = &c->colliders.spheres.data[L->first_sphere_index];
+                for (uint16_t i=0;i<L->num_spheres;i++) {
+                    const float r = C[i].radius, aabbMin[3]={-r,-r,-r},aabbMax[3]={r,r,r};
+                    Transform t = TransformMul(*mainT,T[i]);
+                    int noCollisionDetected = 0;float tMin = 0;
+                    glGetNudgeBodyAtMouseCoordsFromRayStep(rayOrigin3,rayDir3,&t,aabbMin,aabbMax,&noCollisionDetected,&tMin);
+                    if (!noCollisionDetected && (intersection_distance<=0 || intersection_distance>tMin))   {
+                        intersection_distance=tMin;rv=body;
+                        if (pRelativeBoxColliderIndexOut) *pRelativeBoxColliderIndexOut=-1;
+                        if (pRelativeSphereColliderIndexOut) *pRelativeSphereColliderIndexOut=(int16_t)i;
+                    }
+                }
+            }
+        }
+    }
+
+    if (pOptionalDistanceOut) *pOptionalDistanceOut=intersection_distance;
+    return rv;
+}
+uint16_t glGetNudgeBodyAtMouseCoords(nudge::context_t* c,int mouseX,int mouseY,int16_t* pRelativeBoxColliderIndexOut,int16_t* pRelativeSphereColliderIndexOut,float* pOptionalDistanceOut) {
+    assert(c);
+    float rayOrigin[3] = {0,0,0},rayDir[3] = {0,0,-1};
+    GLint viewport[4];glGetIntegerv(GL_VIEWPORT,viewport);
+    nm_Mat4UnProjectMouseCoords(rayOrigin,rayDir,mouseX,mouseY,glmatrices.vpMatrixInv,viewport);  // gluUnProject4
+    return glGetNudgeBodyAtMouseCoordsFromRay(c,rayOrigin,rayDir,pRelativeBoxColliderIndexOut,pRelativeSphereColliderIndexOut,pOptionalDistanceOut);
+}
+
+int glIsAabbVisible(const float* __restrict mMatrix16,float aabbCenterX,float aabbCenterY,float aabbCenterZ,float aabbHalfExtentX,float aabbHalfExtentY,float aabbHalfExtentZ) {
+    int i;const float zero = (float)0;
+    // Start OBB => AABB transformation based on: http://dev.theomader.com/transform-bounding-boxes/
+    float aabb[6];const float* m = mMatrix16;
+    const float c[3] = {aabbCenterX,aabbCenterY,aabbCenterZ};
+    const float he[3]= {aabbHalfExtentX,aabbHalfExtentY,aabbHalfExtentZ};
+    for (i=0;i<3;i++)   {
+        const float hd=fabsf(m[i]*he[0])+fabsf(m[4+i]*he[1])+fabsf(m[8+i]*he[2]);
+        float vmin,vmax;vmin=vmax=m[i]*c[0]+m[4+i]*c[1]+m[8+i]*c[2]+m[12+i];
+        vmin-=hd;vmax+=hd;aabb[i]=vmin;aabb[3+i]=vmax;
+    }
+    // Tip: From now on 'aabb' must be constant
+    // End OBB => AABB transformation based on: http://dev.theomader.com/transform-bounding-boxes/
+    // FAST VERSION
+    {
+        for(i=0; i < 6; i++) {
+            const float *pl = &glmatrices.frustumPlanes[i][0];
+            const int p[3] = {3*(int)(pl[0]>zero),3*(int)(pl[1]>zero),3*(int)(pl[2]>zero)};   // p[j] = 0 or 3
+            const float dp = pl[0]*aabb[p[0]] + pl[1]*aabb[p[1]+1] + pl[2]*aabb[p[2]+2] + pl[3];
+            if (dp < 0) return 0;
+        }
+    }
+    // note that we still have a lot of false positives
+    return 1;
+}
+int glIsAabbVisible(const float* __restrict Tpos3,float aabbEnlargedRadius) {
+    // Note that we cannot simply add an aabbCenter to Tpos3 and use a simple aabbRadius (based on aabbHalfExtents):
+    // But we can enlarge the aabbRadius so that: aabbEnlargedRadius = aabbRadius + distance(Tpos3,aabbCenter);
+    int i;const float zero = (float)0;
+    const float aabb[6] = {Tpos3[0]-aabbEnlargedRadius,Tpos3[1]-aabbEnlargedRadius,Tpos3[2]-aabbEnlargedRadius,Tpos3[0]+aabbEnlargedRadius,Tpos3[1]+aabbEnlargedRadius,Tpos3[2]+aabbEnlargedRadius};
+    for(i=0; i < 6; i++) {
+        const float *pl = &glmatrices.frustumPlanes[i][0];
+        const int p[3] = {3*(int)(pl[0]>zero),3*(int)(pl[1]>zero),3*(int)(pl[2]>zero)};   // p[j] = 0 or 3
+        const float dp = pl[0]*aabb[p[0]] + pl[1]*aabb[p[1]+1] + pl[2]*aabb[p[2]+2] + pl[3];
+        if (dp < 0) return 0;
+    }
+    return 1;
+}
+
+
 void nm_QuatToEulerYPR(const float* q,float* a0,float* a1, float* a2,int i=1,int j=0, int k=2) {
     // based on: Quaternion to Euler angles conversion:
     // A direct, general and computationally efficient method
@@ -1837,9 +2210,9 @@ void compileDisplayLists() {
     case SHAPE_SPHERE_LOW_POLY: glutSolidSphere(1.0f, 8, 4);
         break;
     case SHAPE_CYLINDER_Y:
-        glDrawCylinderY(1.f, 1.f, 16, true);
+        glDrawCylinderY(1.f, 2.f, 16, true);
         break;
-    case SHAPE_CYLINDER_Z: glDrawCylinderZ(1.f, 1.f, 16, true);
+    case SHAPE_CYLINDER_Z: glDrawCylinderZ(1.f, 2.f, 16, true);
         break;
     case SHAPE_HOLLOW_CYLINDER_Y:
         glDrawHollowCylinderY(0.85f,0.15f,2.f,16, true);
@@ -1849,12 +2222,13 @@ void compileDisplayLists() {
         break;
     case SHAPE_CAPSULE_Y:
         //glRotatef(-90.f,1,0,0);
-        glDrawCylinderY(1.f, 1.f,8,true,0);
+        glDrawCylinderY(1.f, 2.f,8,true,0);
         break;
     case SHAPE_CAPSULE_Z:
-        glDrawCylinderZ(1.f, 1.f,8,true,0);
+        glDrawCylinderZ(1.f, 2.f,8,true,0);
         break;
     case SHAPE_SKITTLE:
+        glScalef(2.f,1.f,2.f);
         glPushMatrix();
         glTranslatef(0,-0.85f,0);
         glDrawCylinder(0.5f,0.25f,0.35f,8,/*axis*/ 1, true,1);
@@ -1886,6 +2260,9 @@ void compileDisplayLists() {
                     0.8,	// GLdouble outerRadius
                     16,	// GLint nsides
                     16); // GLint rings)
+        break;
+    case SHAPE_CONE_Y:
+        glDrawCylinder(0.f,1.f, 2.f, 16, 1, true, 1);
         break;
     case SHAPE_TEAPOT:
         glRotatef(-90,0,1,0);
@@ -2051,8 +2428,7 @@ void compileDisplayLists() {
     }
         break;
     case SHAPE_ROOF:
-        // SHAPE_ROOF with scaling (4.f,1.5f,5.5f) // => {1.2f,0.15f,2.75f,    1.2f,0.15f,2.75f};
-        glScalef(1.f/1.2f,1.f/0.15f,1.0f/2.75f);
+        glScalef(0.65f/1.2f,0.2f/0.15f,1.0f/2.75f);
         glTranslatef(0.f,-0.15f,0.0f);
         glScalef(0.54f,0.225f,1.0f);
         glRotatef(30.f,0,0,1);
@@ -2092,6 +2468,79 @@ void compileDisplayLists() {
         glColor3f(0,1,0);glCallList(globals.display_lists[SHAPE_PIVOT3D_AXIS_Y]); // Y Axis
         glColor3f(0,0,1);glCallList(globals.display_lists[SHAPE_PIVOT3D_AXIS_Z]); // Z Axis
         glColor3f(1,1,1);
+        break;
+    case SHAPE_AABB:
+        glBegin(GL_LINE_STRIP);
+        glVertex3f(-1.f,-1.f,-1.f);glVertex3f(-1.f,-1.f,1.f);glVertex3f(1.f,-1.f,1.f);glVertex3f(1.f,-1.f,-1.f);glVertex3f(-1.f,-1.f,-1.f);
+        glVertex3f(-1.f, 1.f,-1.f);glVertex3f(-1.f, 1.f,1.f);glVertex3f(1.f, 1.f,1.f);glVertex3f(1.f, 1.f,-1.f);glVertex3f(-1.f, 1.f,-1.f);
+        glEnd();
+        glBegin(GL_LINES);
+        glVertex3f( 1.f,-1.f,-1.f);glVertex3f( 1.f,1.f,-1.f);glVertex3f( 1.f,-1.f, 1.f);glVertex3f( 1.f,1.f, 1.f);glVertex3f(-1.f,-1.f, 1.f);glVertex3f(-1.f,1.f, 1.f);
+        glEnd();
+        break;
+    case SHAPE_STAR_2D: {
+        const float r=1.f,r_in=0.382f*r; float P[2][10];
+        const float angles[10]={M_DEG2RAD(90.f),M_DEG2RAD(126.f),M_DEG2RAD(162.f),M_DEG2RAD(198.f),M_DEG2RAD(234.f),M_DEG2RAD(270.f),M_DEG2RAD(306.f),M_DEG2RAD(342.f),M_DEG2RAD(18.f), M_DEG2RAD(54.f)};
+        for (int i=0;i<10;i++) {
+            const float radius=(i%2==0)?r:r_in;
+            P[0][i]=radius*cosf(angles[i]);
+            P[1][i]=radius*sinf(angles[i]);
+        }
+        glBegin(GL_TRIANGLES);
+        glNormal3f(0,0,1);
+        for (int i=0;i<10;i+= 2) {
+            const int ip1=(i+1)%10, im1=(i+9)%10;
+            glVertex2f(P[0][i],   P[1][i]);
+            glVertex2f(P[0][ip1], P[1][ip1]);
+            glVertex2f(P[0][im1], P[1][im1]);
+        }
+        glVertex2f(P[0][1], P[1][1]);
+        glVertex2f(P[0][3], P[1][3]);
+        glVertex2f(P[0][5], P[1][5]);
+
+        glVertex2f(P[0][1], P[1][1]);
+        glVertex2f(P[0][5], P[1][5]);
+        glVertex2f(P[0][7], P[1][7]);
+
+        glVertex2f(P[0][1], P[1][1]);
+        glVertex2f(P[0][7], P[1][7]);
+        glVertex2f(P[0][9], P[1][9]);
+        glEnd();
+    }
+        break;
+    case SHAPE_STAR: {
+        const float R=1.0f,r=R*0.5f,hd=1.0f; // hd: half depth
+        const float offy = 0.5f*R*cosf(M_DEG2RAD(72.f)), scaleY=2.f*R/(2.f*R-offy), scaleXZ=1.f-((1.f-scaleY)*0.25f);
+        glTranslatef(0,-offy*0.5f,0);glScalef(scaleXZ,scaleY,scaleXZ); // the latter 2 lines are for centering/rescaling (=optional)
+        struct Vertex {float x, y, z;} front[10]={},back[10]={};
+        for (int i=0;i<10;i++) {
+            Vertex *v0=&front[i],*v1=&back[i];
+            const float a=M_PI*(0.5f+i*0.2f),rad=(i%2==0)?R:r;
+            const float x=rad*cosf(a),y=rad*sinf(a);
+            v0->x=x;v0->y=y;v0->z=hd;v1->x=x;v1->y=y;v1->z=-hd;
+        }
+        glBegin(GL_TRIANGLES);
+        for (int j=0;j<2;j++)  {
+            Vertex* vertices=(j==0?front:back), center={0.f,0.f,vertices[0].z};
+            glNormal3f(0.f,0.f,j==0?1.f:-1.f);
+            for (int i=0;i<10;i++) {
+                const int next=(i+1)%10;
+                const Vertex *v0=&center,*v1=&vertices[i],*v2=&vertices[next];
+                if (j==0) {glVertex3fv(&v0->x);glVertex3fv(&v1->x);glVertex3fv(&v2->x);}
+                else {glVertex3fv(&v0->x);glVertex3fv(&v2->x);glVertex3fv(&v1->x);}
+            }
+        }
+        for (int i=0;i<10;i++) {
+            const int next=(i+1)%10;
+            const Vertex *v0=&front[i],*v1=&back[i],*v2=&back[next],*v3=&front[next];
+            const Vertex d1={v1->x-v0->x,v1->y-v0->y,v1->z-v0->z};
+            const Vertex d2={v2->x-v0->x,v2->y-v0->y,v2->z-v0->z};
+            Vertex n;nudge::nm_Vec3Cross(&n.x,&d1.x,&d2.x);glNormal3fv(&n.x);
+            glVertex3fv(&v0->x);glVertex3fv(&v1->x);glVertex3fv(&v2->x);
+            glVertex3fv(&v0->x);glVertex3fv(&v2->x);glVertex3fv(&v3->x);
+        }
+        glEnd();
+    }
         break;
     case SHAPE_COUNT:
         break;
@@ -2163,15 +2612,35 @@ void glprintf_flush(void) {
         if (alpha>0) {
             if (alpha<1) glEnable(GL_BLEND);
             glBegin(GL_QUADS);
-            glColor4f(45.0f/255.f,148.f/255.f,129.f/255.f,alpha);glVertex2d(viewport[0],viewport[1]);
-            glColor4f(29.f/255.f,86.f/255.f,103.f/255.f,alpha);glVertex2d(viewport[2],viewport[1]);
-            glColor4f(62.f/255.f,48.f/255.f,99.f/255.f,alpha);glVertex2d(viewport[2],viewport[3]);
-            glColor4f(78.f/255.f,62.f/255.f,107.f/255.f,alpha);glVertex2d(viewport[0],viewport[3]);
+            const float c0=199.f/255.f,c1=180.f/255.f,c2=166.f/255,c3=150.f/255.f;
+            glColor4f(c0,c0,c0,alpha);glVertex2d(viewport[0],viewport[1]);
+            glColor4f(c1,c1,c1,alpha);glVertex2d(viewport[2],viewport[1]);
+            glColor4f(c2,c2,c2,alpha);glVertex2d(viewport[2],viewport[3]);
+            glColor4f(c3,c3,c3,alpha);glVertex2d(viewport[0],viewport[3]);
             glEnd();
+            if (globals.gui.menu_idx==1) {
+                const float screen_center[2] = {(float)(viewport[2]+viewport[0])*0.5f,(float)(viewport[3]+viewport[1])*0.5f};
+                const float screen_halfsize[2] = {(float)(viewport[2]-viewport[0])*0.5f,(float)(viewport[3]-viewport[1])*0.5f};
+                const float c[2] = {screen_center[0]+screen_halfsize[0]*0.075f,screen_center[1]+screen_halfsize[1]*0.775f};
+                const float h = screen_halfsize[1]*0.2f;const float s[2] = {1.5f*h,h};
+                glColor4f(0.f,51.f/255.f,153.f/255.f,1.f-(1.f-alpha)*0.75f);
+                glPushMatrix();
+                glBegin(GL_QUADS);
+                glVertex2f(c[0]-s[0],c[1]-s[1]);glVertex2f(c[0]+s[0],c[1]-s[1]);
+                glVertex2f(c[0]+s[0],c[1]+s[1]);glVertex2f(c[0]-s[0],c[1]+s[1]);
+                glEnd();
+                glColor4f(1.f,204.f/255.f,0.f,alpha);
+                const float scale = h/8.f;const float scale2 = 5.5f;
+                glTranslatef(c[0],c[1],0.f);glScalef(scale,-scale,1.f);
+                for (int j=0;j<12;j++)   {
+                    const float angle = (float)j*(M_PI/6.f),cosa=cosf(angle),sina=sinf(angle);
+                    glPushMatrix();glTranslatef(scale2*cosa,scale2*sina,0.f);drawShape(SHAPE_STAR_2D);glPopMatrix();
+                }
+                glPopMatrix();
+            }
             if (alpha<1) glDisable(GL_BLEND);
         }
         // -----------------------------------------------
-
         if (alpha==target_alpha) {
             //int base_y = 0;
 #           ifndef GLPRINTF_FLUSH_NO_TWEAKING
@@ -2318,6 +2787,7 @@ void HandleMenus(void)  {
         glguihelp("/c[%d][H]    /c[%d]Show/Hide help page\n",Y,N);
         glguihelp("/c[%d][M]    /c[%d]Show/Hide menu page\n",Y,N);
         glguihelp("/c[%d][SPACE]    /c[%d]Toggle display mode\n",Y,N);
+        glguihelp("/c[%d][F]    /c[%d]Toggle frustum culling (%s)\n",Y,N,globals.use_frustum_culling?"on":"off");
         glguihelp("/c[%d][ESC]  /c[%d]Quit program\n",Y,N);
 
         glguihelp("/c[%d]/h[7]/v[2]",N);
@@ -2325,8 +2795,9 @@ void HandleMenus(void)  {
         glguihelp("/c[%d][F5]   /c[%d]Quick save simulation\n",Y,N);
         glguihelp("/c[%d][F7]   /c[%d]Quick reload simulation\n",Y,N);
         glguihelp("/c[%d][LMB]  /c[%d]Throw body\n",Y,N);
+        glguihelp("/c[%d][RMB]  /c[%d]Select body\n",Y,N);
 
-        glguihelp("\n\n/c[%d]/h[2]",N);
+        glguihelp("\n/c[%d]/h[2]",N);
         glguihelp("/c[%d][ENTER/END/MMB]    /c[%d]Toggle camera mode\n",Y,N);
         glguihelp("/c[%d][ARROW_KEYS]   /c[%d]Rotate camera\n",Y,N);
         glguihelp("/c[%d][PAGE_UP/PAGE_DOWN]    /c[%d]Zoom camera\n",Y,N);
@@ -2334,9 +2805,21 @@ void HandleMenus(void)  {
         glguihelp("/c[%d][HOME]   /c[%d]Reset camera\n",Y,N);
         glguihelp("/c[%d][WASD][J]    /c[%d]Move character and jump\n",Y,N);
 
-        glguihelp("\n\n\n/h[5]/c[%d]CREDITS\n\n/h[2]/c[%d]",H2,N);
+        glguihelp("\n/h[5]/c[%d]CREDITS\n\n/h[2]/c[%d]",H2,N);
         glguihelp("-    To Mark J. Kilgard for releasing the OpenGL Utility Toolkit in 1994.\n");
         glguihelp("-    To Rasmus Barringer for releasing Nudge Physics in 2017.\n");
+
+        glguihelp("/h[5]/v[7]\n/c[%d]Made in EU",N);
+
+        static float FPS=60.f,sum=0.f;static int cnt=0;
+        sum+=globals.instantFrameTime;if (cnt==60) {FPS=sum>0?60.f/sum:60.f;sum=0;cnt=0;}
+        glguihelp("/h[9]/v[9]\n\n/c[%d]FPS: %1.f",N,FPS);
+
+        if (globals.num_stars>0) {
+            if (globals.use_frustum_culling) glguihelp("/f[s]/h[0]/v[9]\n/c[%d]   Num stars: %u/12\n   Num frustum culled bodies: %u/%u/f[n]",N,globals.num_stars,globals.num_frustum_culled_bodies,c->bodies.count-c->global_data.removed_bodies_count);
+            else glguihelp("/f[s]/h[0]/v[9]\n\n/c[%d]   Num stars: %u/12/f[n]",N,globals.num_stars);
+        }
+        else if (globals.use_frustum_culling) glguihelp("/f[s]/h[0]/v[9]\n\n/c[%d]   Num frustum culled bodies: %u/%u/f[n]",N,globals.num_frustum_culled_bodies,c->bodies.count-c->global_data.removed_bodies_count);
 
     }
         break;
@@ -2469,4 +2952,15 @@ void CharacterControllerFixSinkingEffectOnFall(unsigned body,float* mMatrix16,in
                 mMatrix16[13]=aux_T->p[1]+aux_coll->size[1]+coll->size[1];
         }
     }
+}
+
+
+
+float* getStarPosition(unsigned number) {
+    static float pos[12*3] = {11.19,4.60,-11.00,-12.03,6.43,-10.71,-11.95,6.43,5.48,-21.02,1.50,0.20,
+                            1.93,3.82,20.60,20.55,4.86,0.23,-20.97,6.98,1.63,-7.04,5.78,1.38,
+                            -3.69,5.53,-3.30,1.06,1.28,-11.79,-0.01,12.73,1.05,-3.55,2.43,-4.65};
+
+    assert(number<12);
+    return &pos[(number)*3];
 }
