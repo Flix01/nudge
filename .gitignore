@@ -66,6 +66,7 @@ reps/
 *.7z
 *.sav
 example/html
+example/reps
 example/linux/example
 example/example
 example/example_no_ffp
@@ -90,6 +91,7 @@ new_version/example/win/example*
 new_version/example/mac/example*
 new_version/nudge_examples.pro
 new_version/nudge_examples.pro.user
+new_version/deps/
 
 
 

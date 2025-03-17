@@ -75,6 +75,10 @@ enum ShapeEnum {
     SHAPE_TORUS_Y,
     SHAPE_TORUS_Z,
     SHAPE_CONE_Y,
+    SHAPE_PRISM_5_Y,
+    SHAPE_PRISM_6_Y,
+    SHAPE_PRISM_7_Y,
+    SHAPE_PRISM_8_Y,
     SHAPE_TEAPOT,
     SHAPE_ROOF,
     SHAPE_CHARACTER,
@@ -144,14 +148,18 @@ static struct globals_t {
     } selection;
 	GLuint display_lists[SHAPE_COUNT];	// display lists speed up rendering	
 	float instantFrameTime; // = 16.2f;
-    unsigned kinematic_body;    // we store the index of a kinematic body to move it around manually
-    unsigned character_body;    // same as before
-    unsigned star_body,num_stars;
+    struct bodies_t {
+        unsigned kinematic_body;    // we store the index of a kinematic body to move it around manually
+        unsigned character_body;    // same as before
+        unsigned conveyor_belt_body0,conveyor_belt_body1;
+        unsigned star_body, num_stars;
+        unsigned rotating_platform_animation_index;
+        unsigned fix_character_sinking_effect_on_fall;   // experiment
+    } bodies;
     unsigned use_frustum_culling;
-    unsigned fix_character_sinking_effect_on_fall;   // experiment
     unsigned num_frustum_culled_bodies; // to monitor frustum culling
 
-} globals = {{},1,0,{{{0,2,0},2*M_PI,M_PI*0.125f,20,{0,0,0}},{{0,2,0},M_PI,M_PI*0.125f,5,{0,0,0}}},{1,1,2},{45.f,0.5f,200.0f},{0,0,0,(uint32_t)-1,0,0},{0,0.65f,{0}},{NUDGE_INVALID_BODY_ID,-1,-1},{0},16.2,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,0,1,0,0};
+} globals = {{},1,0,{{{0,2,0},2*M_PI,M_PI*0.125f,20,{0,0,0}},{{0,2,0},M_PI,M_PI*0.125f,5,{0,0,0}}},{1,1,2},{45.f,0.5f,200.0f},{0,0,0,(uint32_t)-1,0,0},{0,0.65f,{0}},{NUDGE_INVALID_BODY_ID,-1,-1},{0},16.2,{NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,0,(unsigned)-1,0},1,0};
 static nudge::context_t* c = &globals.nudge_context;	// shorter... we'll use this
 
 // some experimental stuff to ease tweaking/debugging
@@ -180,7 +188,7 @@ enum KeyMask {KEY_REGULAR_KEY_START_INDEX=0,
 
 // Please note that code related to nudge physics is mostly grouped in the functions that follow
 // You can usually avoid to read further. 80% of the physics code is in InitPhysics().
-inline void bind_body(nudge::context_t* c,unsigned body,ShapeEnum shape,ColorEnum color=COLOR_NONE) {c->bodies.infos[body].user.u16[0] = shape;c->bodies.infos[body].user.u16[1] = color;}
+inline void bind_body(nudge::context_t* c,unsigned body,ShapeEnum shape,ColorEnum color=COLOR_NONE) {c->bodies.infos[body].user.u16[0] = shape; c->bodies.infos[body].user.u16[1] = (color!=COLOR_NONE)?color:(ColorEnum)(1+(body%(COLOR_COUNT-1)));/*(persistent) 'random' body color*/}
 inline ShapeEnum bodyinfo_get_shape_enum(const nudge::BodyInfo* info) {return (ShapeEnum) info->user.u16[0];}
 inline ColorEnum bodyinfo_get_color_enum(const nudge::BodyInfo* info) {return (ColorEnum) info->user.u16[1];}
 float* getStarPosition(unsigned number); // forward declaration
@@ -311,6 +319,10 @@ void InitPhysics() {
     body = add_compound(c,torusMass,torusInertia,num_boxes,hsizeTripletsForTorus,csT,0,NULL,NULL,&T);
     bind_body(c,body,SHAPE_TORUS_Z,COLOR_CORAL);
 
+    // test add_clone(...) [experimental]
+    T.p[1]=0.f;T.p[1]=1.5f*torusScale;T.p[2]=2.5f;
+    body = add_clone(c,body,torusMass*1.5f,&T,-1.f);    // see the docs for further info
+    bind_body(c,body,SHAPE_TORUS_Z,COLOR_CADETBLUE);
 
     // hollow cylinder (box compound)
     T=identity_transform;
@@ -349,20 +361,9 @@ void InitPhysics() {
         body = add_box(c,1000.f,cylradius/1.9f,T.p[1],cylradius/1.9f,&T);
         float* tmp = c->bodies.properties[body].inertia_inverse;tmp[0]=tmp[1]=tmp[2]=0;
         tmp = c->bodies.properties[body].gravity;tmp[0]=tmp[1]=tmp[2]=0;
-        c->bodies.filters[body].flags|=BF_IS_SENSOR;    // note that BF_IS_SENSOR ia completely unused  in nudge.h (just an empty tag)
+        c->bodies.filters[body].flags|=BF_IS_SENSOR;    // note that BF_IS_SENSOR ia completely unused in nudge.h (just an empty tag)
         c->bodies.filters[body].collision_mask = 0; // don't collide with any body
         c->bodies.filters[body].flags|=BF_NEVER_SLEEPING;   // this is bad! This way c->active_bodies.count is always positive!
-        bind_body(c,body,SHAPE_NONE,COLOR_RED);
-    }
-    else {
-        // This is the only way to use a kinematic body as sensor but... it's not a sensor anymore (it collides with other bodies)
-        // The catch is:
-        // if collision filters of body A prevent collision with some body B, than contact data between body A and body B are not reported UNLESS A is a DYNAMIC body AND A is not sleeping
-        // so if we want to use static or kinematic bodies as sensors, we must enable collisions with the body we must detect => it's not a sensor anymore
-        // Note that for the purpose of this demo the effect is the same
-        body = add_box(c,0.f,cylradius/1.9f,T.p[1],cylradius/1.9f,&T);
-        c->bodies.filters[body].flags|=BF_IS_SENSOR;    // note that BF_IS_SENSOR ia completely unused  in nudge.h (just an empty tag)
-        //c->bodies.filters[body].collision_mask = 0; // [NOPE!] don't collide with any body (if set => no more collisions reported here)
         bind_body(c,body,SHAPE_NONE,COLOR_RED);
         /*
             Considerations:
@@ -380,6 +381,17 @@ void InitPhysics() {
             In a typical application, we can probably mitigate the 'correct_way' by removing the 'BF_NEVER_SLEEPING'
             flag when the body is distant (but it's a solution I don't like).
         */
+    }
+    else {
+        // This is the only way to use a kinematic body as sensor but... it's not a sensor anymore (it collides with other bodies)
+        // The catch is:
+        // if collision filters of body A prevent collision with some body B, then contact data between body A and body B are not reported UNLESS A is a DYNAMIC body AND A is not sleeping
+        // so if we want to use static or kinematic bodies as sensors, we must enable collisions with the body we must detect => it's not a sensor anymore
+        // Note that for the purpose of this demo the effect is the same
+        body = add_box(c,0.f,cylradius/1.9f,T.p[1],cylradius/1.9f,&T);
+        c->bodies.filters[body].flags|=BF_IS_SENSOR;    // note that BF_IS_SENSOR ia completely unused in nudge.h (just an empty tag)
+        //c->bodies.filters[body].collision_mask = 0; // [NOPE!] don't collide with any body (if set => no more collisions reported here)
+        bind_body(c,body,SHAPE_NONE,COLOR_RED);
     }
 
 
@@ -401,10 +413,9 @@ void InitPhysics() {
         else T.p[0]+=-spacingX+(j-3)*spacingX;   // last row (3 skittles)
         body = add_box(c,1.f,hsize[0],hsize[1],hsize[2],&T,comOffset);
         bind_body(c,body,SHAPE_SKITTLE,COLOR_GOLDENROD);
-        c->bodies.filters[body].collision_group = COLLISION_GROUP_A;   // group the body belongs to (see flags of next body)
+        c->bodies.filters[body].collision_group = COLLISION_GROUP_A;   // group the body belongs to (see the flags of the kinematic teapot)
     }
     memset(comOffset,0,sizeof(float)*3);    // reset comOffset variable
-
 
     // test extra:: namespace
     T=identity_transform;T.p[0]=-3.5f;T.p[1]=0.5f;T.p[2]=6.f;
@@ -412,18 +423,18 @@ void InitPhysics() {
     bind_body(c,body,SHAPE_CYLINDER_Y,COLOR_PINK);
 
     // test extra:: namespace
-    T=identity_transform;T.p[0]=-5.0f;T.p[1]=1.f;T.p[2]=6.f;
+    T=identity_transform;T.p[0]=-5.0f;T.p[1]=0.5f+0.25f;T.p[2]=6.f;
     body = extra::add_compound_capsule(c,0.5f,0.25f,0.5f,&T,AXIS_Y,0,0);
     bind_body(c,body,SHAPE_CAPSULE_Y,COLOR_AZURE);
 
     // test extra:: namespace
     T=identity_transform;T.p[0]=-7.0f;T.p[1]=0.5f;T.p[2]=8.f;
-    body = extra::add_compound_cone(c,0.5f,0.75f,T.p[1],&T,AXIS_Y,0,0);
-    bind_body(c,body,SHAPE_CONE_Y,COLOR_YELLOW);
+    body = extra::add_compound_cone(c,0.5f,0.5f,T.p[1],&T,AXIS_Y,0,0);
+    bind_body(c,body,SHAPE_CONE_Y,COLOR_YELLOW);    // SHAPE_CONE_Y enum draws wrong lateral normals
 
     // test extra:: namespace
-    T=identity_transform;T.p[0]=-6.5f;T.p[1]=1.f;T.p[2]=6.f;
-    body = extra::add_compound_hollow_cylinder(c,0.5f,0.25f,0.5,0.5f,&T,AXIS_Y,0,0);
+    T=identity_transform;T.p[0]=-6.5f;T.p[1]=0.5f;T.p[2]=6.f;
+    body = extra::add_compound_hollow_cylinder(c,0.5f,0.35f,0.5f,T.p[1],&T,AXIS_Y,0,0);    // same as the comment below
     bind_body(c,body,SHAPE_HOLLOW_CYLINDER_Y,COLOR_ORANGERED);
 
     // test extra:: namespace
@@ -433,21 +444,12 @@ void InitPhysics() {
 
     // test extra:: namespace
     T=identity_transform;T.p[0]=-5.0f;T.p[1]=0.5f;T.p[2]=4.f;
-    body = extra::add_compound_prism(c,1.f,0.5f,T.p[1],15,&T,AXIS_Y);
-    bind_body(c,body,SHAPE_CYLINDER_Y,COLOR_SKYBLUE);
-
-    // star (box) [collectable test]
-    if (globals.num_stars<12) {
-        T=identity_transform;memcpy(T.p,getStarPosition(globals.num_stars),3*sizeof(float));
-        globals.star_body = body = add_box(c,-2.f,0.5f,0.5,0.1,&T);
-        body_set_collision_group_and_mask(c,body,COLLISION_GROUP_F,COLLISION_GROUP_C);
-        bind_body(c,body,SHAPE_STAR,COLOR_YELLOW);
-    }
-    else globals.star_body=NUDGE_INVALID_BODY_ID;
+    body = extra::add_compound_prism(c,1.f,0.5f,T.p[1],6,&T,AXIS_Y);   // min 4 lateral faces (but in that case use SHAPE_BOX).
+    bind_body(c,body,SHAPE_PRISM_6_Y,COLOR_SKYBLUE);    // SHAPE_PRISM_ enums draw wrong lateral normals (and are a bit too small to fit the correct aabb)
 
     // kinematic teapot (box) [manual kinematic body test] [collision mask test]
     T=identity_transform;T.p[0]=1.5f;T.p[1]=0.5f;T.p[2]=8.0f;
-    globals.kinematic_body = body = add_box(c,-10000.f,0.5f,0.5f,0.75f,&T);
+    globals.bodies.kinematic_body = body = add_box(c,-10000.f,0.5f,0.5f,0.75f,&T);
     bind_body(c,body,SHAPE_TEAPOT,COLOR_LIGHTSKYBLUE);
     c->bodies.filters[body].collision_group = COLLISION_GROUP_E;   // group the body belongs to
     c->bodies.filters[body].collision_mask = COLLISION_GROUP_ALL & (~COLLISION_GROUP_A);    // groups the body can collide with (all except bodies of group A)
@@ -512,13 +514,31 @@ void InitPhysics() {
 
     // experimental character (ehm...) controller (box)
     T=identity_transform;T.p[0]=7.5f;T.p[1]=0.65f;T.p[2]=-4.f;nm_QuatFromAngleAxis(T.q,-M_PI*0.5f,0,1,0);
-    body = add_box(c,20.f,.3f,T.p[1],0.1f,&T);
-    bind_body(c,body,SHAPE_CHARACTER,globals.num_stars<12?COLOR_YELLOW:COLOR_ORANGE);
-    globals.character_body = body;assert(body==c->bodies.transforms[body].body);
+    const float chdim[3] = {.3f,T.p[1],0.1f}, cmass=20.f;
+    // simple box shape
+    body = add_box(c,cmass,chdim[0],chdim[1],chdim[2],&T);
+    // or compound shape (almost useless)
+    // const float bC[3] = {chdim[0],chdim[1]*0.7f,chdim[2]};
+    // const float sCs[4] = {chdim[0]*0.35f,chdim[0]*0.35f,chdim[0]*0.4f,chdim[0]*0.4f};
+    // Transform cTs[5]={identity_transform,identity_transform,identity_transform,identity_transform,identity_transform};
+    // cTs[0].p[1]=-sCs[2]*0.5f;cTs[3].p[1]=chdim[1]-sCs[2]*0.5f;cTs[4].p[1]=cTs[3].p[1]-sCs[3]*1.f;
+    // cTs[1].p[1]=-chdim[1]+sCs[0];cTs[1].p[0]=chdim[0]*0.4f;;cTs[2].p[1]=-chdim[1]+sCs[1];cTs[2].p[0]=-chdim[0]*0.4f;
+    // body = add_compound(c,cmass,NULL,1,bC,&cTs[0],4,sCs,&cTs[1],&T);
+    bind_body(c,body,SHAPE_CHARACTER,globals.bodies.num_stars<12?COLOR_YELLOW:COLOR_ORANGE);
+    globals.bodies.character_body = body;assert(body==c->bodies.transforms[body].body);
     float* in_inv = c->bodies.properties[body].inertia_inverse;in_inv[0]=in_inv[1]=in_inv[2]=0.f;
     c->bodies.properties[body].friction=4.5f;  // default body friction is 1.f AFAIR
     c->bodies.filters[body].flags|=BF_IS_CHARACTER; // note that this flag does nothing in nudge.h
     c->bodies.filters[body].collision_group=COLLISION_GROUP_C;
+
+    // star (box) [collectable test]
+    if (globals.bodies.num_stars<12) {
+        T=identity_transform;memcpy(T.p,getStarPosition(globals.bodies.num_stars),3*sizeof(float));
+        globals.bodies.star_body = body = add_box(c,-2.f,0.5f,0.5,0.1,&T); // IMPORTANT: the absolute value of the mass will be used when we later turn this body to dynamic (when the star is collected)
+        body_set_collision_group_and_mask(c,body,COLLISION_GROUP_F,COLLISION_GROUP_C);  // collides only with group_c (our character), otherwise no (kinematic) collision report (see the sensor experiment)
+        bind_body(c,body,SHAPE_STAR,COLOR_YELLOW);
+    }
+    else globals.bodies.star_body=NUDGE_INVALID_BODY_ID;
 
     // experimental platform (box)
     {
@@ -605,41 +625,42 @@ void InitPhysics() {
 
     // conveyor belts experiments (box) (static boxes with a linear velocity)
     T=identity_transform;T.p[0]=-11.0275f;T.p[1]=-0.198f;T.p[2]=5.f;
-    body = add_box(c,0,2.025f,0.2f,1.5f,&T);
+    globals.bodies.conveyor_belt_body0 = body = add_box(c,0,2.025f,0.2f,1.5f,&T);
     bind_body(c,body,SHAPE_BOX,COLOR_RED);
-    c->bodies.momentum[body].velocity[0]=-1.5f; // in this demo it does not work, because we're overriding this value at runtime in DrawPhysics(), but it works
+    c->bodies.momentum[body].velocity[0]=-1.5f; // this line does not work, because we're overriding this value at runtime in UpdatePhysics(), but it usually works
     c->bodies.properties[body].friction = 2.f;
-    c->bodies.filters[body].flags|=BF_IS_CONVEYOR_BELT;  // this flag is unused in nudge.h (just a naming tag)
     c->bodies.filters[body].flags|=BF_IS_PLATFORM;  // test (toggle and see the difference on character)
 
     T.p[0]=-12.f;T.p[1]=4.f-0.2f;T.p[2]=-0.25f;
-    body = add_box(c,0,1.f,0.2f,4.75f,&T);
+    globals.bodies.conveyor_belt_body1 = body = add_box(c,0,1.f,0.2f,4.75f,&T);
     bind_body(c,body,SHAPE_BOX,COLOR_RED);
-    c->bodies.momentum[body].velocity[2]=-1.5f; // in this demo it does not work, because we're overriding value at runtime in DrawPhysics(), but it works
+    c->bodies.momentum[body].velocity[2]=-1.5f; // this line does not work, because we're overriding this value at runtime in UpdatePhysics(), but it usually works
     c->bodies.properties[body].friction = 2.f;
-    c->bodies.filters[body].flags|=BF_IS_CONVEYOR_BELT;  // this flag is unused in nudge.h (just a naming tag)
     c->bodies.filters[body].flags|=BF_IS_PLATFORM;  // test (toggle and see the difference on character)
 
 
-    // another moving platform: rotating platform test here (box)
+    // another moving platform here: [rotating platform test] (box)
     {
         // -> kinematic animation construction
         // ------> key frames set (key frames for all animations are all in a single global array)
-        const uint32_t start_key_frame = c->kinematic_data.key_frame_count;
-        kinematic_data_reserve_key_frames(&c->kinematic_data,c->kinematic_data.key_frame_count+7);    // we'll use <=4 frames in total
-        assert(c->kinematic_data.key_frame_capacity>=c->kinematic_data.key_frame_count+7);
-        uint32_t* total_key_frames_count = &c->kinematic_data.key_frame_count;   // for all animations
+        const uint32_t start_key_frame = c->kinematic_data.key_frame_count, num_frames_to_add = 7;
+        kinematic_data_reserve_key_frames(&c->kinematic_data,c->kinematic_data.key_frame_count+num_frames_to_add);    // we'll use <=4 frames in total
+        assert(c->kinematic_data.key_frame_capacity>=c->kinematic_data.key_frame_count+num_frames_to_add);
         Transform T = identity_transform, *pkfTransforms = &c->kinematic_data.key_frame_transforms[start_key_frame];       // at this point they're all set to identity
+        unsigned new_frames_cnt=0;
+        // All times here are in seconds for the default animation speed (ka->speed=1.0f), that we don't use...
+        // Warning: 'T = identity_transform;' resets T.time too!
+        T = identity_transform;T.time = 2.f;/*if !=0 platform waits some time*/     pkfTransforms[new_frames_cnt++]=T;
+        T.time =  8.f;nm_QuatFromAngleAxis(T.q,M_PI*(0.66f*1.f),0,1,0);T.p[1]=1.5f; pkfTransforms[new_frames_cnt++]=T;
+        T.time =  8.f;nm_QuatFromAngleAxis(T.q,M_PI*(0.66f*2.f),0,1,0);T.p[1]=3.0f; pkfTransforms[new_frames_cnt++]=T;
+        T.time =  8.f;nm_QuatFromAngleAxis(T.q,M_PI*(0.66f*3.f),0,1,0);T.p[1]=4.5f; pkfTransforms[new_frames_cnt++]=T;
+        T.time =  8.f;nm_QuatFromAngleAxis(T.q,M_PI*(0.66f*4.f),0,1,0);T.p[1]=3.0f; pkfTransforms[new_frames_cnt++]=T;
+        T.time =  8.f;nm_QuatFromAngleAxis(T.q,M_PI*(0.66f*5.f),0,1,0);T.p[1]=1.5f; pkfTransforms[new_frames_cnt++]=T;
+        T = identity_transform;T.time =  8.f;                                       pkfTransforms[new_frames_cnt++]=T;
 
-        // Warning: T = identity_transform; // resets T.time too!
-        T = identity_transform;T.time = 8.f;/*frame0 time used is only on loop*/    pkfTransforms[0]=T;(*total_key_frames_count)++;   // key frame 0
-        T = identity_transform;T.time = 8.f;                                        pkfTransforms[1]=T;(*total_key_frames_count)++;   // key frame 1
-        T.time =  8.f;nm_QuatFromAngleAxis(T.q,M_PI*(0.66f*1.f),0,1,0);T.p[1]=1.5f; pkfTransforms[2]=T;(*total_key_frames_count)++;   // key frame 2
-        T.time =  8.f;nm_QuatFromAngleAxis(T.q,M_PI*(0.66f*2.f),0,1,0);T.p[1]=3.0f; pkfTransforms[3]=T;(*total_key_frames_count)++;   // key frame 3
-        T.time =  8.f;nm_QuatFromAngleAxis(T.q,M_PI*(0.66f*3.f),0,1,0);T.p[1]=4.5f; pkfTransforms[4]=T;(*total_key_frames_count)++;   // key frame 4
-        T.time =  8.f;nm_QuatFromAngleAxis(T.q,M_PI*(0.66f*4.f),0,1,0);T.p[1]=3.0f; pkfTransforms[5]=T;(*total_key_frames_count)++;   // key frame 5
-        T.time =  8.f;nm_QuatFromAngleAxis(T.q,M_PI*(0.66f*5.f),0,1,0);T.p[1]=1.5f; pkfTransforms[6]=T;(*total_key_frames_count)++;   // key frame 6
-        assert(*total_key_frames_count<=c->kinematic_data.key_frame_capacity);
+        assert(new_frames_cnt==num_frames_to_add);  // well, <= could work
+        assert(c->kinematic_data.key_frame_count==start_key_frame);c->kinematic_data.key_frame_count+=new_frames_cnt;  // mandatory
+        assert(c->kinematic_data.key_frame_count<=c->kinematic_data.key_frame_capacity);
 
         // ------> kinematic animation that use these key frames
         kinematic_data_reserve_animations(&c->kinematic_data,c->kinematic_data.animations_count+1);    // we'll use <=2 animation in total
@@ -650,15 +671,19 @@ void InitPhysics() {
         body = add_box(c,-1000.f,2.5f,0.2f,1.5f,&T,com_offset);
         bind_body(c,body,SHAPE_BOX,COLOR_DARKGREEN);
         c->bodies.filters[body].flags|=BF_IS_PLATFORM;     // note that this flag does nothing in nudge.h
+        c->bodies.infos[body].sk_user.i8[3]=0;  // we'll use this value as a driver for platform movement direction (-1,0,1); 0 = platform stands still
 
+        globals.bodies.rotating_platform_animation_index = c->kinematic_data.animations_count;
         KinematicData::Animation* ka = &c->kinematic_data.animations[c->kinematic_data.animations_count++];
-        ka->key_frame_start = start_key_frame; ka->key_frame_count = 7;
+        ka->key_frame_start = start_key_frame; ka->key_frame_count = new_frames_cnt;
         ka->loop_mode = KinematicData::Animation::LM_LOOP_NORMAL;
         ka->body = body;
         ka->use_baseT = true; ka->baseT = c->bodies.transforms[body];nm_QuatFromAngleAxis(ka->baseT.q,M_PI*1.5f,0,1,0);   // unless key frame Transforms are in the absolute space, this must always be set
-        ka->speed = 0.4f;    // but too fast kinematic animations can lead to tunnelling
-        ka->play_time = ka->offset_time = 8.f;  // Probably, when LM_LOOP_NORMAL is set, the time at frame 0 is used and the slerp starts from the last frame (TO CHECK... probably it'not the expected behavior but nevermind: setting time[0]=0 should fix this in any case...)
-        ka->playing = true;
+        ka->speed = 0.f;    // we'll set the speed dynamically when c->bodies.infos[body].aux_bodies[1]!=0 (we'll set that when the character is on it)
+        ka->play_time = ka->offset_time = 0.f;
+        ka->playing = true; // we could trigger this instead of ka->speed... but it's almost the same
+
+        c->bodies.transforms[body] = ka->baseT; // this places 'body' at frame 0 (if it has an identity T like in our case) even if ka->playing==false or ka->speed==0; (otherwise is just useless)
     }
 
     // (box stack test)
@@ -756,11 +781,11 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
         const float sinAngle = sinf(*angle),cosAngle = cosf(*angle);
 
         // we must manually advance our 'manual' kinematic bodies by granularElapsedTime
-        if (globals.kinematic_body<c->bodies.count) {
+        if (globals.bodies.kinematic_body<c->bodies.count) {
             using namespace nudge;
             const float basePosition[3] = {1.5f,0.5f,5.0};const float amplitude = 3.0f;
-            const Transform* T = &c->bodies.transforms[globals.kinematic_body];  // Tip: don't change this directly!
-            assert(T->body==globals.kinematic_body);    // did you know it?
+            const Transform* T = &c->bodies.transforms[globals.bodies.kinematic_body];  // Tip: don't change this directly!
+            assert(T->body==globals.bodies.kinematic_body);    // did you know it?
 
             Transform newT= { {{basePosition[0]+amplitude*sinAngle,T->p[1],basePosition[2]+amplitude*cosAngle}},{},{{T->r[0],T->r[1],T->r[2],T->r[3]}} };assert(newT.r[3]!=0);
             nm_QuatFromAngleAxis(newT.r,*angle+M_PI*0.5f,0.f,1.f,0.f);   // this line rotates the body while moving in circle
@@ -770,10 +795,27 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
             // For this to work the passed delta time (i.e. granularElapsedTime) must be small
             TransformAssignToBody(c,T->body,newT,granularElapsedTime);
         }
-        // we do the same for our character body (even if it's dynamic)
-        if (globals.character_body<c->bodies.count) {
+        // here we change the velocity of the two conveyor belts dynamically
+        if (globals.bodies.conveyor_belt_body0<c->bodies.count) {c->bodies.momentum[globals.bodies.conveyor_belt_body0].velocity[0] = -0.5f+1.5f*sinAngle;}
+        if (globals.bodies.conveyor_belt_body1<c->bodies.count) {c->bodies.momentum[globals.bodies.conveyor_belt_body1].velocity[2] = 1.f*sinAngle;}
+        // here we adjust the moving speed of the platform rotating around
+        if (globals.bodies.rotating_platform_animation_index<c->kinematic_data.animations_count) {
+            nudge::KinematicData::Animation* an = &c->kinematic_data.animations[globals.bodies.rotating_platform_animation_index];
+            if (an->body<c->bodies.count) {
+                if (an->playing) {
+                    const float rotating_platform_max_speed = 0.45f;
+                    const int8_t dir = c->bodies.infos[an->body].sk_user.i8[3];
+                    const float speed_step = granularElapsedTime*rotating_platform_max_speed;
+                    //if (globals.key.pressed&KEY_MOUSE_BUTTON_RIGHT && globals.key.down&KEY_CTRL) c->bodies.infos[an->body].sk_user.i8[3]=dir==0?1:-dir;
+                    if (dir>0) {if (an->speed<rotating_platform_max_speed) {an->speed+=speed_step;if (an->speed>rotating_platform_max_speed) an->speed=rotating_platform_max_speed;}}
+                    else if (dir<0)  {if (an->speed>-rotating_platform_max_speed) {an->speed-=speed_step;if (an->speed<-rotating_platform_max_speed) an->speed=-rotating_platform_max_speed;}}
+                }
+            }
+        }
+        // here we manually advance our character body (even if it's dynamic)
+        if (globals.bodies.character_body<c->bodies.count) {
             using namespace nudge;
-            Transform* T = &c->bodies.transforms[globals.character_body];assert(globals.character_body==T->body);
+            Transform* T = &c->bodies.transforms[globals.bodies.character_body];assert(globals.bodies.character_body==T->body);
             const BodyInfo* info = &c->bodies.infos[T->body];
 
             const uint32_t state_key_down = globals.key.down;
@@ -785,13 +827,9 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
             const bool character_must_jump = aux_body>=0 && (state_key_pressed&KEY_J);
             const bool character_is_on_platform =  aux_body>=0 && (c->bodies.filters[aux_body].flags&BF_IS_PLATFORM);
             if (character_must_jump) {
-                // well, jumping would need to detect ground collision...
-                // now it's just incremental... but this is just a raw test
-                // also if the character is too heavy then if he jumps on any
-                // dynamic body he makes it sink into the ground...
                 const float amount = 5.f;
-                c->bodies.momentum[globals.character_body].velocity[1]+=amount;
-                if (c->bodies.filters[globals.character_body].flags&BF_IS_DYNAMIC) c->bodies.idle_counters[globals.character_body]=0;  // wakes up body (dynamic body only)
+                c->bodies.momentum[globals.bodies.character_body].velocity[1]+=amount;
+                if (c->bodies.filters[globals.bodies.character_body].flags&BF_IS_DYNAMIC) c->bodies.idle_counters[globals.bodies.character_body]=0;  // wakes up body (dynamic body only)
             }
             else if ((state_key_down&KEY_WASD) || character_is_on_platform)   {
                 Transform tr = *T;   // copy
@@ -800,6 +838,16 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
                     float yaw[4];nm_QuatFromAngleAxis(yaw,amount,0,1,0);
                     nm_QuatMul(tr.rotation,T->rotation,yaw);
                     nm_QuatNormalize(tr.rotation);
+                    // optional stuff (change the moving direction of the platform rotating around)
+                    if (character_is_on_platform && globals.bodies.rotating_platform_animation_index<c->kinematic_data.animations_count && (unsigned)aux_body==c->kinematic_data.animations[globals.bodies.rotating_platform_animation_index].body) {
+                        float ch_axis_z[3];nm_QuatGetAxisZ(ch_axis_z,tr.rotation);
+                        float pl_axis_x[3];nm_QuatGetAxisX(pl_axis_x,c->bodies.transforms[aux_body].q);
+                        const float dot = nm_Vec3Dot(ch_axis_z,pl_axis_x);
+                        const float min_abs_dot = 0.9f;
+                        if (dot>min_abs_dot) c->bodies.infos[aux_body].sk_user.i8[3]=1;
+                        else if (dot<-min_abs_dot) c->bodies.infos[aux_body].sk_user.i8[3]=-1;
+                    }
+                    // end optional stuff
                 }
                 if (state_key_down&(KEY_W|KEY_S)) {
                     // Note that this allows only walking on planar surfaces... Y movement of everything about 'character ehm controller' has not be handled...
@@ -820,7 +868,7 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
                 // Maybe we can just remove the line below and then make the angular velocity decrease with time
                 // Easiest way is to keep the hack (character won't use its angular velocity in collisions, but that does not happen frequently... but some collision artifact might appear)
                 T->rotation[0]=tr.rotation[0];T->rotation[1]=tr.rotation[1];T->rotation[2]=tr.rotation[2];T->rotation[3]=tr.rotation[3];
-                float* velocity = c->bodies.momentum[globals.character_body].velocity;
+                float* velocity = c->bodies.momentum[globals.bodies.character_body].velocity;
                 const float oldVelocity[3] = {velocity[0],velocity[1],velocity[2]};
                 TransformAssignToBody(c,T->body,tr,globals.instantFrameTime,character_is_on_platform?aux_body:-1);   // This wakes up body if dynamic too
                 velocity[1] = oldVelocity[1];  // velocityY is necessary to make jumping work better
@@ -841,12 +889,16 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
             // simple, proof-of-a-concept header-only physics sengine (although IMHO
             // it's one of the most useful single-header C file ever written!)
         }
-        // and we animate the star
-        if (globals.star_body<c->bodies.count && c->bodies.filters[globals.star_body].flags&nudge::BF_IS_STATIC_OR_KINEMATIC) {
-            using namespace nudge;assert(globals.num_stars<12);
-            const float y = getStarPosition(globals.num_stars)[1];
-            Transform* T = &c->bodies.transforms[globals.star_body];T->p[1]=y+0.2f*cosAngle;
+        // here we animate the star
+        if (globals.bodies.star_body<c->bodies.count && c->bodies.filters[globals.bodies.star_body].flags&nudge::BF_IS_STATIC_OR_KINEMATIC) {
+            using namespace nudge;assert(globals.bodies.num_stars<12);
+            const float y = getStarPosition(globals.bodies.num_stars)[1];
+            Transform* T = &c->bodies.transforms[globals.bodies.star_body];T->p[1]=y+0.2f*cosAngle;
             nm_QuatFromAngleAxis(T->q,*angle,0,1,0);
+
+            //test (to remove)
+            //body_scale(c,globals.bodies.star_body,1.f+0.01f*sinAngle);
+            //body_scale(c,globals.bodies.star_body,-1.f+0.1f*sinAngle);
         }
     }
     nudge::simulation_step(c);  // Mandatory
@@ -886,14 +938,14 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
             {
                 // These code assigns a 'ground' to 'character' (1-to allow jumping only when is present;2-to allow correct walking on moving platforms)
                 const uint32_t character = a_is_character?a:b,other_body = a_is_character?b:a;int dbg=0;
-                if (other_body==globals.star_body
+                if (other_body==globals.bodies.star_body
                         //|| (dbg=globals.key.down&KEY_SHIFT && globals.key.down&KEY_SPACE)
                         ) {
                     BodyFilter* other_body_filters;
-                    if (dbg) {*( (uint32_t*) &other_body) = globals.star_body;other_body_filters = &c->bodies.filters[other_body];}
+                    if (dbg) {*( (uint32_t*) &other_body) = globals.bodies.star_body;other_body_filters = &c->bodies.filters[other_body];}
                     else other_body_filters = a_is_character ? (BodyFilter*)b_filter : (BodyFilter*)a_filter;
                     if (other_body_filters->flags&BF_IS_STATIC_OR_KINEMATIC)    {
-                        ++globals.num_stars;
+                        ++globals.bodies.num_stars;
                         body_change_motion_state(c,other_body,BF_IS_DYNAMIC);
                         other_body_filters->collision_mask=0;   // turn off collisions with everything
                         const float *camPos = globals.camera[globals.use_character_camera].cameraPos, *starPos = c->bodies.transforms[other_body].p;
@@ -971,29 +1023,21 @@ void DrawPhysics()  {
         // are freed and the body indices are reusable by nudge::add_ (this happens automatically)
         if (c->bodies.transforms[body].p[1]<-40.f && filter->flags&BF_IS_DYNAMIC) {
             // here we just remove (graphic) boxes and spheres, and respawn other bodies
-            if ((shape==SHAPE_BOX || shape==SHAPE_SPHERE || (body==globals.star_body && globals.num_stars==12)) && !(filter->flags&(BF_IS_CHARACTER|BF_IS_PLATFORM))) {
+            if ((shape==SHAPE_BOX || shape==SHAPE_SPHERE || (body==globals.bodies.star_body && globals.bodies.num_stars==12)) && !(filter->flags&(BF_IS_CHARACTER|BF_IS_PLATFORM))) {
                 remove_body(c,body);if (body==globals.selection.body) {globals.selection.body=NUDGE_INVALID_BODY_ID;globals.selection.box_relative_index=globals.selection.sphere_relative_index=-1;}
-                if (body==globals.star_body) {
-                    globals.star_body=NUDGE_INVALID_BODY_ID;
-                    if (globals.character_body<c->bodies.count) {bind_body(c,globals.character_body,SHAPE_CHARACTER,COLOR_ORANGE);c->bodies.momentum[globals.character_body].velocity[1]=5.f;}
+                if (body==globals.bodies.star_body) {
+                    globals.bodies.star_body=NUDGE_INVALID_BODY_ID;
+                    if (globals.bodies.character_body<c->bodies.count) {bind_body(c,globals.bodies.character_body,SHAPE_CHARACTER,COLOR_ORANGE);c->bodies.momentum[globals.bodies.character_body].velocity[1]=5.f;}
                 }
                 continue;
             }
-            else if (body==globals.star_body) {
-                assert(globals.num_stars<12);// when a star falls to the bottom we must display next star
+            else if (body==globals.bodies.star_body) {
+                assert(globals.bodies.num_stars<12);// when a star falls to the bottom we must display next star
                 body_change_motion_state(c,body,BF_IS_KINEMATIC);filter->collision_mask=COLLISION_GROUP_C;  // restore flags/collision mask
-                memcpy(c->bodies.transforms[body].p,getStarPosition(globals.num_stars),3*sizeof(float));
+                memcpy(c->bodies.transforms[body].p,getStarPosition(globals.bodies.num_stars),3*sizeof(float));
                 assert(c->bodies.transforms[body].p[1]>-40.f);
             }
             else {Transform* T = &c->bodies.transforms[body];T->p[0]=0.f;T->p[1]=20.f;T->p[2]=0.0f;} // respawn all the other bodies
-        }
-        // and also exploit this loop to change the velocity of our conveyor belts dynamically (better move this code somewhere else)
-        if (filter->flags&BF_IS_CONVEYOR_BELT) {
-            float* velocity = c->bodies.momentum[body].velocity;
-            const int axis = info->aabb_half_extents[0]>info->aabb_half_extents[2]?0:2;
-            // here we reuse c->user.f32[1], that we assign when we manually move the kinematic teapot in UpdatePhysics() (and it's better to add this code there, storying conveyor bodies in the globals struct)
-            if (axis==0) velocity[axis] = -0.5f+1.5f*sinf(c->user.f32[1]);   // first conveyor belt (CONVEYOR_BELT_X)
-            else if (axis==2) velocity[axis] = 1.f*sinf(c->user.f32[1]);    // second conveyor belt (CONVEYOR_BELT_Z)
         }
         // end loop exploiting... back to basic drawing of all bodies
         //-----------------------------------------------------------
@@ -1003,9 +1047,7 @@ void DrawPhysics()  {
         const int has_com_offset = filter->flags&BF_HAS_COM_OFFSET;
 
         assert(info->user.u16[1]<COLOR_COUNT);// we have stuffed the per-body color enum in info->userUint16[1]
-        ColorEnum color = (ColorEnum) bodyinfo_get_color_enum(info);
-        if (color==COLOR_NONE) color = (ColorEnum) (1+(body%(COLOR_COUNT-1))); // (persistent) random body color
-
+        ColorEnum color = (ColorEnum) bodyinfo_get_color_enum(info);assert(color!=COLOR_NONE); // COLOR_NONE is replaced in bind_body(...)
 
         if (use_graphic_transform)	{
             // Use use_graphic_transform=1 in release mode, where you have a single graphic mesh
@@ -1025,7 +1067,7 @@ void DrawPhysics()  {
             // end frustum culling on mMatrix
 
             // experiment (to remove) ------
-            if ((filter->flags&BF_IS_CHARACTER) && globals.fix_character_sinking_effect_on_fall && info->aux_bodies[0]>=0)
+            if ((filter->flags&BF_IS_CHARACTER) && globals.bodies.fix_character_sinking_effect_on_fall && info->aux_bodies[0]>=0)
                 CharacterControllerFixSinkingEffectOnFall(body,mMatrix,info->aux_bodies[0]);  // [experimental] attempt to mitigate the 'sinking effect' of characters after a jump or a fall
             // -----------------------------
 
@@ -1054,6 +1096,10 @@ void DrawPhysics()  {
             case SHAPE_CYLINDER_Y:
             case SHAPE_CYLINDER_Z:
             case SHAPE_CONE_Y:
+            case SHAPE_PRISM_5_Y:
+            case SHAPE_PRISM_6_Y:
+            case SHAPE_PRISM_7_Y:
+            case SHAPE_PRISM_8_Y:
             case SHAPE_SKITTLE:
             case SHAPE_TEAPOT:
             case SHAPE_STAR:
@@ -1367,11 +1413,7 @@ void HandleKeys(void) {
                     nudge::save_context(f,c);
                     // we append some fields in the 'globals' struct
                     fwrite(&globals.selection,sizeof(globals_t::selection_t),1,f);
-                    fprintf(f,"\nkinematic_body: %u",globals.kinematic_body);
-                    fprintf(f,"\ncharacter_body: %u",globals.character_body);
-                    fprintf(f,"\nstar_body: %u",globals.star_body);
-                    fprintf(f,"\nnum_stars: %u",globals.num_stars);
-                    fprintf(f,"\nfix_character_sinking_effect_on_fall: %u",globals.fix_character_sinking_effect_on_fall);
+                    fwrite(&globals.bodies,sizeof(globals_t::bodies_t),1,f);
                     fprintf(f,"\nuse_graphic_transform: %u",globals.use_graphic_transform);
                     fprintf(f,"\nuse_character_camera: %u",globals.use_character_camera);
                     fprintf(f,"\nuse_frustum_culling: %u",globals.use_frustum_culling);
@@ -1383,11 +1425,7 @@ void HandleKeys(void) {
                     nudge::load_context(f,c);
                     // we append some fields in the 'globals' struct
                     int cnt=fread(&globals.selection,sizeof(globals_t::selection_t),1,f);assert(cnt==1);
-                    cnt=fscanf(f,"\nkinematic_body: %u",&globals.kinematic_body);assert(cnt==1);
-                    cnt=fscanf(f,"\ncharacter_body: %u",&globals.character_body);assert(cnt==1);
-                    cnt=fscanf(f,"\nstar_body: %u",&globals.star_body);assert(cnt==1);
-                    cnt=fscanf(f,"\nnum_stars: %u",&globals.num_stars);assert(cnt==1);
-                    cnt=fscanf(f,"\nfix_character_sinking_effect_on_fall: %u",&globals.fix_character_sinking_effect_on_fall);assert(cnt==1);
+                    cnt=fread(&globals.bodies,sizeof(globals_t::bodies_t),1,f);assert(cnt==1);
                     cnt=fscanf(f,"\nuse_graphic_transform: %u",&globals.use_graphic_transform);assert(cnt==1);
                     cnt=fscanf(f,"\nuse_character_camera: %u",&globals.use_character_camera);assert(cnt==1);
                     cnt=fscanf(f,"\nuse_frustum_culling: %u",&globals.use_frustum_culling);assert(cnt==1);
@@ -1407,7 +1445,7 @@ void HandleKeys(void) {
         if (key->pressed&(KEY_MOUSE_BUTTON_MIDDLE|KEY_ENTER|KEY_END)) globals.use_character_camera=!globals.use_character_camera;
         if (key->pressed&KEY_MOUSE_BUTTON_RIGHT) globals.selection.body = glGetNudgeBodyAtMouseCoords(c,key->mouseX,key->mouseY,&globals.selection.box_relative_index,&globals.selection.sphere_relative_index);
     }
-    //else if (key->down&KEY_SHIFT) {if (key->pressed&KEY_SPACE) {const float* p=c->bodies.transforms[globals.character_body].p;nudge::log("%1.2f,%1.2f,%1.2f,\n",p[0],p[1]+0.65f,p[2]);nudge::flush();}}
+    //else if (key->down&KEY_SHIFT) {if (key->pressed&KEY_SPACE) {const float* p=c->bodies.transforms[globals.bodies.character_body].p;nudge::log("%1.2f,%1.2f,%1.2f,\n",p[0],p[1]+0.65f,p[2]);nudge::flush();}}
 
     // camera movement keys
     if (globals.gui.menu_idx!=2)    {
@@ -1579,7 +1617,7 @@ void DrawGL() {
 float nm_QuatGetYaw(const float* q); // forward declaration of internal function
 void updateCameraPos() {
     // this function is called once per frame in DrawGL()
-    if (globals.use_character_camera && globals.character_body>=c->bodies.count) globals.use_character_camera=0; // no character
+    if (globals.use_character_camera && globals.bodies.character_body>=c->bodies.count) globals.use_character_camera=0; // no character
     globals_t::camera_t* cam = &globals.camera[globals.use_character_camera];
 
     if (cam->cameraYaw>M_PI) cam->cameraYaw-=2*M_PI;
@@ -1593,8 +1631,8 @@ void updateCameraPos() {
     float yaw = cam->cameraYaw;
     if (globals.use_character_camera)   {
         using namespace nudge;
-        assert(globals.character_body<c->bodies.count);
-        const Transform* T = &c->bodies.transforms[globals.character_body];assert(T->body==globals.character_body);
+        assert(globals.bodies.character_body<c->bodies.count);
+        const Transform* T = &c->bodies.transforms[globals.bodies.character_body];assert(T->body==globals.bodies.character_body);
         yaw+=nm_QuatGetYaw(T->q);
 
         const BodyLayout* L = &c->bodies.layouts[T->body];
@@ -1614,7 +1652,7 @@ void updateCameraPos() {
 
     const bool smooth_camera = true;//globals.use_character_camera;    // optional: not a real slerp, just a lerp => it makes people sick...
     if (smooth_camera) {
-        assert(globals.character_body<c->bodies.count);
+        assert(globals.bodies.character_body<c->bodies.count);
         static float oldCameraPos[3]={},oldTargetPos[3]={};
         static unsigned last_camera_mode=100;
         const bool skip_lerp = (last_camera_mode!=globals.use_character_camera) || (globals.use_character_camera==0 && (globals.key.pressed&(KEY_HOME|KEY_F7)));
@@ -2264,6 +2302,18 @@ void compileDisplayLists() {
     case SHAPE_CONE_Y:
         glDrawCylinder(0.f,1.f, 2.f, 16, 1, true, 1);
         break;
+    case SHAPE_PRISM_5_Y:
+        glRotatef(-(float)(5-2)*180.f*0.5f,0,1,0);glDrawCylinderY(1.f,2.f,5);
+        break;
+    case SHAPE_PRISM_6_Y:
+        glRotatef((float)(6-2)*180.f*0.5f,0,1,0);glDrawCylinderY(1.f,2.f,6);
+        break;
+    case SHAPE_PRISM_7_Y:
+        glRotatef((float)(7-2)*180.f*0.5f,0,1,0);glDrawCylinderY(1.f,2.f,7);
+        break;
+    case SHAPE_PRISM_8_Y:
+        glRotatef((float)(8-2)*180.f*0.5f,0,1,0);glDrawCylinderY(1.f,2.f,8);
+        break;
     case SHAPE_TEAPOT:
         glRotatef(-90,0,1,0);
         glScalef(0.8,1.5,1.2);
@@ -2631,7 +2681,7 @@ void glprintf_flush(void) {
                 glEnd();
                 glColor4f(1.f,204.f/255.f,0.f,alpha);
                 const float scale = h/8.f;const float scale2 = 5.5f;
-                glTranslatef(c[0],c[1],0.f);glScalef(scale,-scale,1.f);
+                glTranslatef(c[0],c[1]*1.0025f,0.f);glScalef(scale,-scale,1.f);
                 for (int j=0;j<12;j++)   {
                     const float angle = (float)j*(M_PI/6.f),cosa=cosf(angle),sina=sinf(angle);
                     glPushMatrix();glTranslatef(scale2*cosa,scale2*sina,0.f);drawShape(SHAPE_STAR_2D);glPopMatrix();
@@ -2815,9 +2865,9 @@ void HandleMenus(void)  {
         sum+=globals.instantFrameTime;if (cnt==60) {FPS=sum>0?60.f/sum:60.f;sum=0;cnt=0;}
         glguihelp("/h[9]/v[9]\n\n/c[%d]FPS: %1.f",N,FPS);
 
-        if (globals.num_stars>0) {
-            if (globals.use_frustum_culling) glguihelp("/f[s]/h[0]/v[9]\n/c[%d]   Num stars: %u/12\n   Num frustum culled bodies: %u/%u/f[n]",N,globals.num_stars,globals.num_frustum_culled_bodies,c->bodies.count-c->global_data.removed_bodies_count);
-            else glguihelp("/f[s]/h[0]/v[9]\n\n/c[%d]   Num stars: %u/12/f[n]",N,globals.num_stars);
+        if (globals.bodies.num_stars>0) {
+            if (globals.use_frustum_culling) glguihelp("/f[s]/h[0]/v[9]\n/c[%d]   Num stars: %u/12\n   Num frustum culled bodies: %u/%u/f[n]",N,globals.bodies.num_stars,globals.num_frustum_culled_bodies,c->bodies.count-c->global_data.removed_bodies_count);
+            else glguihelp("/f[s]/h[0]/v[9]\n\n/c[%d]   Num stars: %u/12/f[n]",N,globals.bodies.num_stars);
         }
         else if (globals.use_frustum_culling) glguihelp("/f[s]/h[0]/v[9]\n\n/c[%d]   Num frustum culled bodies: %u/%u/f[n]",N,globals.num_frustum_culled_bodies,c->bodies.count-c->global_data.removed_bodies_count);
 
@@ -2840,7 +2890,7 @@ void HandleMenus(void)  {
         {"max_num_substeps",&sp->max_num_substeps,NUDGE_DEFAULT_MAX_NUM_SIMULATION_SUBSTEPS,1,10,1},
         {"numsubsteps_overflow_warning_mode",&sp->numsubsteps_overflow_warning_mode,0,0,2,1},
         {"num_iterations_per_substep",&sp->num_iterations_per_substep,NUDGE_DEFAULT_NUM_SIMULATION_ITERATIONS,3,1000,1},
-        {"fix_character_sinking_effect_on_fall",&globals.fix_character_sinking_effect_on_fall,0,0,1,1}
+        {"fix_character_sinking_effect_on_fall",&globals.bodies.fix_character_sinking_effect_on_fall,0,0,1,1}
         },
         {
         {"sleeping_threshold_linear_velocity_squared",&sp->sleeping_threshold_linear_velocity_squared,NUDGE_DEFAULT_SLEEPING_THRESHOLD_LINEAR_VELOCITY_SQUARED,0.001f,2.f,0.005f},

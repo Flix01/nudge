@@ -48,7 +48,7 @@ int main() {
     init_context(&c);
 
     // Add bodies
-    Transform T = {}; T.position[1] = 40.f;
+    Transform T = identity_transform; T.position[1] = 40.f;
     unsigned body = add_sphere(&c, 1.f, 0.5f, &T); // returns the 'permanent' index to the physic body
 
     // Program main loop

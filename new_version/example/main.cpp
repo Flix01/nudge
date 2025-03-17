@@ -24,7 +24,7 @@
 // The code just shows the new API (no new feature has been used)
 
 // Can be compiled with the provided build files, but also with:
-// c++ -march=native -fno-rtti -fno-exceptions -O3 -Wall -fno-rtti -fno-exceptions -I../ ./stdafx.cpp ./main.cpp -o example -lglut -lGL
+// c++ -march=native -O3 -Wall -fno-rtti -fno-exceptions -I../ ./stdafx.cpp ./main.cpp -o example -lglut -lGL
 
 #include "stdafx.h"
 #include <assert.h>
@@ -153,7 +153,7 @@ static void render() {
                     assert((uint16_t)layout->first_box_index+layout->num_boxes<=c->colliders.boxes.count);
 					//const nudge::BoxCollider* coll = &c->colliders.boxes.data[info->first_box_index];	// first box shape (of globals.num_boxes_per_torus)
 					//const nudge::Transform* T = &c->colliders.boxes.transforms[info->first_box_index];	// first relative transform (of globals.num_boxes_per_torus)
-					// the idea was be to use 'coll->size[]' and/or 'T' to extract a scaling that works...
+                    // the idea was to use 'coll->size[]' and/or 'T' to extract a scaling that works...
 					// ... but in the end I stored the dims in 'globals' at the top of the file
 					glScalef(1.f,1.f,1.f);
 					glutSolidTorus(globals.inner_torus_radius,	// GLdouble innerRadius
@@ -171,7 +171,7 @@ static void render() {
 		}
 		else {
 			// Use use_graphic_transform=0 in debug mode, where you don't have a graphic mesh 
-			// or you want to see all the boxes/spheres that make up the body.
+            // or you want to see all the boxes/spheres that make up the body.
 			// The transforms here are not smoothed.						
 			const nudge::Transform* T1 = &c->bodies.transforms[body];
             if (layout->num_boxes>0) {
@@ -211,6 +211,12 @@ static void render() {
 	//if (num_sleeping_and_dynamic>0) {printf("[Frame:%llu] num_sleeping_bodies:%u (num_active_bodies:%u)\n",c->simulation_params.num_frames,num_sleeping_and_dynamic,c->active_bodies.count);fflush(stdout);}
 	// wrong! [2814] 1526 (1532) -> sleeping objects are not removed from the active list. Why?
 
+    // [CHECK] Checked the original nudge library: given that the original library had all dynamic bodies except body=0 that was the static ground (no kinematic bodies):
+    // -> sleeping dynamic bodies ARE indeed present in the active_bodies list (=> are not removed from the active list)
+    // -> The static ground (body=0) is not present in the active_bodies list
+    // So the original behavior is similar to this one, although here static/kinematic bodies are present in the active_bodies list as well
+    // And I've tried to keep static/kinematic bodies out of the active_bodies list, but collision detection is not reliable anymore (bodies can sink through the ground, expecially the character in example02.cpp)
+    // So this is probably the best we can get so far
 }
 
 static void simulate() {
