@@ -779,7 +779,7 @@ static __inline GLuint DRR_LoadShaderProgramFromSource(const char* vs,const char
     if (!result)
     {
         //We failed to compile.
-        printf("Program failed to link.\n");
+        printf("DRR_LoadShaderProgramFromSource: Program failed to link.\n");
 
         //Attempt to get the length of our error log.
         glGetProgramiv(programId, GL_INFO_LOG_LENGTH, &errorLoglength);

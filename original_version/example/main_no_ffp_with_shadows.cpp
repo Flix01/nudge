@@ -748,8 +748,16 @@ static void GlutFakeDrawGL(void) 	{glutDisplayFunc(GlutDrawGL);}
 int main(int argc, const char* argv[]) {
 	// Disable denormals for performance.
 #ifndef NUDGE_USE_SIMDE
+#	ifdef _MM_SET_FLUSH_ZERO_MODE
     _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+#	else
+	printf("Skipping _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);\n");
+#	endif   
+#	ifdef _MM_SET_DENORMALS_ZERO_MODE 
     _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+#	else
+	printf("Skipping _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);\n");
+#	endif    
 #endif //NUDGE_USE_SIMDE
 	
 
@@ -948,7 +956,7 @@ int main(int argc, const char* argv[]) {
     glutReshapeFunc(resize);
 
 #	ifdef NUDGE_USE_SIMDE
-	printf("\nUSING SIMDE (simd emulation).\n");
+	printf("\nUSING SIMDE (simd everywhere).\n");
 #		ifdef SIMDE_AVX2_NATIVE
 		printf("SIMDE: SIMDE_AVX2_NATIVE is defined.\n");
 //#		error SIMDE_AVX2_NATIVE is defined.

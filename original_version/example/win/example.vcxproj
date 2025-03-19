@@ -84,14 +84,6 @@
     <LinkIncremental>false</LinkIncremental>
     <IncludePath>../../;./;$(IncludePath)</IncludePath>
   </PropertyGroup>
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
-    <Optimization>MaxSpeed</Optimization>
-    <AdditionalDependencies>freeglut.lib;opengl32.lib;</AdditionalDependencies>
-    <AdditionalLibraryDirectories>.</AdditionalLibraryDirectories>
-    <AdditionalIncludeDirectories>GLUT</AdditionalIncludeDirectories>    
-</PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <PrecompiledHeader>
@@ -150,7 +142,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\stdafx.cpp" />
+    <ClCompile Include="..\..\nudge.cpp" />
     <ClCompile Include="..\main.cpp" />
   </ItemGroup>
   <ItemGroup>

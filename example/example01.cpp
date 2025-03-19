@@ -1,5 +1,9 @@
 // file: example01.cpp [note: this is the Getting Started example present in the documentation]
 // g++ example01.cpp -I../ -I./ -march=native -O3 -Wall -o example01
+
+// using emscripten, with output in a subfolder named ./html we can try something like
+// em++ -O3 -msse2 -msimd128 -fno-rtti -fno-exceptions -o html/nudge_example01.html ./example01.cpp -I"./" -I"../"
+
 #define NUDGE_IMPLEMENTATION // [TODO 0] better do this in another cpp file to speed up recompilations
 #include "nudge.h"
 

@@ -10,7 +10,7 @@
 		3A58408A1EEDCF200091C228 /* GLUT.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3A5840891EEDCF200091C228 /* GLUT.framework */; };
 		3A58408C1EEDCF270091C228 /* OpenGL.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3A58408B1EEDCF270091C228 /* OpenGL.framework */; };
 		3ADE448D1ED177C100D3DEA5 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 3ADE448C1ED177C100D3DEA5 /* main.cpp */; };
-		3ADE44901ED177CD00D3DEA5 /* nudge.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 3ADE448E1ED177CD00D3DEA5 /* nudge.cpp */; };
+		3ADE44901ED177CD00D3DEA5 /* stdafx.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 3ADE448E1ED177CD00D3DEA5 /* stdafx.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -30,7 +30,7 @@
 		3A58408B1EEDCF270091C228 /* OpenGL.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = OpenGL.framework; path = System/Library/Frameworks/OpenGL.framework; sourceTree = SDKROOT; };
 		3ADE447C1ED1776500D3DEA5 /* example */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = example; sourceTree = BUILT_PRODUCTS_DIR; };
 		3ADE448C1ED177C100D3DEA5 /* main.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = main.cpp; path = ../main.cpp; sourceTree = "<group>"; };
-		3ADE448E1ED177CD00D3DEA5 /* nudge.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = nudge.cpp; path = ../../nudge.cpp; sourceTree = "<group>"; };
+		3ADE448E1ED177CD00D3DEA5 /* stdafx.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = stdafx.cpp; path = ../stdafx.cpp; sourceTree = "<group>"; };
 		3ADE448F1ED177CD00D3DEA5 /* nudge.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = nudge.h; path = ../../nudge.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -76,7 +76,7 @@
 		3ADE448B1ED177B800D3DEA5 /* example */ = {
 			isa = PBXGroup;
 			children = (
-				3ADE448E1ED177CD00D3DEA5 /* nudge.cpp */,
+				3ADE448E1ED177CD00D3DEA5 /* stdafx.cpp */,
 				3ADE448F1ED177CD00D3DEA5 /* nudge.h */,
 				3ADE448C1ED177C100D3DEA5 /* main.cpp */,
 			);
@@ -140,7 +140,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				3ADE44901ED177CD00D3DEA5 /* nudge.cpp in Sources */,
+				3ADE44901ED177CD00D3DEA5 /* stdafx.cpp in Sources */,
 				3ADE448D1ED177C100D3DEA5 /* main.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

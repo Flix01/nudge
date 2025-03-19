@@ -1580,7 +1580,7 @@ void DrawGL() {
 	// Setup light.
     nudge::nm_Vec3Normalize(globals.lightDirection);
     glLightf(GL_LIGHT0, GL_POSITION,globals.lightDirection[0]);
-    
+
     // Draws all the physic bodies
     DrawPhysics();
 	
@@ -1733,7 +1733,7 @@ int main(int argc, const char* argv[]) {
 	// Start GLUT.
 	glutInit(&argc, const_cast<char**>(argv));
 	glutInitDisplayMode(GLUT_RGBA | GLUT_DEPTH | GLUT_DOUBLE);
-	glutInitWindowSize(1024, 600);
+    glutInitWindowSize(1024, 600);
     glutCreateWindow("nudge example02");
     glutDisplayFunc(GlutFakeDrawGL);
     glutIdleFunc(GlutIdle);
@@ -2075,8 +2075,7 @@ int glIsAabbVisible(const float* __restrict mMatrix16,float aabbCenterX,float aa
     const float he[3]= {aabbHalfExtentX,aabbHalfExtentY,aabbHalfExtentZ};
     for (i=0;i<3;i++)   {
         const float hd=fabsf(m[i]*he[0])+fabsf(m[4+i]*he[1])+fabsf(m[8+i]*he[2]);
-        float vmin,vmax;vmin=vmax=m[i]*c[0]+m[4+i]*c[1]+m[8+i]*c[2]+m[12+i];
-        vmin-=hd;vmax+=hd;aabb[i]=vmin;aabb[3+i]=vmax;
+        const float ct=m[i]*c[0]+m[4+i]*c[1]+m[8+i]*c[2]+m[12+i];aabb[i]=ct-hd;aabb[3+i]=ct+hd;
     }
     // Tip: From now on 'aabb' must be constant
     // End OBB => AABB transformation based on: http://dev.theomader.com/transform-bounding-boxes/
@@ -2634,6 +2633,7 @@ void glprintf_flush(void) {
     int elapsedTime = glutGet(GLUT_ELAPSED_TIME) - timeBegin;
     if (elapsedTime<0) {timeBegin = glutGet(GLUT_ELAPSED_TIME);elapsedTime=0;}
     const bool can_blink = ((elapsedTime/100)%10)<5;
+    if (glprintf_buffer_size==0 && c->simulation_params.num_frames==1) {glprintf_buffer_size=2;glprintf_buffer[0]=' ';glprintf_buffer[1]='\0';}
 
     if (glprintf_buffer_size>0) {
         GLint viewport[4];glGetIntegerv(GL_VIEWPORT,viewport);
