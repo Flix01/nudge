@@ -9,8 +9,10 @@ INPUT                  = nudge.h # Adjusted path to source files
 FILE_PATTERNS          = *.h
 RECURSIVE              = NO
 EXTRACT_ALL            = YES
+SORT_MEMBER_DOCS       = NO
 GENERATE_HTML          = YES
-GENERATE_LATEX         = NO
+GENERATE_LATEX 		   = NO # if active creates a .tex file instead of the html doc (needs  LaTeX, and pdflatex too if we need to convert it to .pdf)
+#LATEX_OUTPUT 		   = latex # optional name of the output .tex directory
 HTML_HEADER            = 
 HTML_FOOTER            = 
 HTML_EXTRA_FILES       = 
@@ -19,5 +21,6 @@ HTML_EXTRA_FILES       =
 GENERATE_TREEVIEW      = YES
 QUIET                  = NO
 WARN_IF_UNDOCUMENTED   = YES
-SORT_MEMBER_DOCS       = NO
+HAVE_DOT 			   = NO # no graphs (otherwise it needs graphvix installed)
+
 

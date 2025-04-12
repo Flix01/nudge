@@ -81,6 +81,7 @@ enum ShapeEnum {
     SHAPE_PRISM_8_Y,
     SHAPE_TEAPOT,
     SHAPE_ROOF,
+    SHAPE_STAIRCASE_20_STEPS,
     SHAPE_CHARACTER,
     SHAPE_STAR,
     SHAPE_PIVOT3D_CENTER,
@@ -188,9 +189,9 @@ enum KeyMask {KEY_REGULAR_KEY_START_INDEX=0,
 
 // Please note that code related to nudge physics is mostly grouped in the functions that follow
 // You can usually avoid to read further. 80% of the physics code is in InitPhysics().
-inline void bind_body(nudge::context_t* c,unsigned body,ShapeEnum shape,ColorEnum color=COLOR_NONE) {c->bodies.infos[body].user.u16[0] = shape; c->bodies.infos[body].user.u16[1] = (color!=COLOR_NONE)?color:(ColorEnum)(1+(body%(COLOR_COUNT-1)));/*(persistent) 'random' body color*/}
-inline ShapeEnum bodyinfo_get_shape_enum(const nudge::BodyInfo* info) {return (ShapeEnum) info->user.u16[0];}
-inline ColorEnum bodyinfo_get_color_enum(const nudge::BodyInfo* info) {return (ColorEnum) info->user.u16[1];}
+inline void bind_body(nudge::context_t* c,unsigned body,ShapeEnum shape,ColorEnum color=COLOR_NONE) {c->bodies.infos[body].user.u8[0] = (uint8_t) shape; c->bodies.infos[body].user.u8[1] = (uint8_t) ((color!=COLOR_NONE)?color:(ColorEnum)(1+(body%(COLOR_COUNT-1))));/*(persistent) 'random' body color*/}
+inline ShapeEnum bodyinfo_get_shape_enum(const nudge::BodyInfo* info) {return (ShapeEnum) info->user.u8[0];}
+inline ColorEnum bodyinfo_get_color_enum(const nudge::BodyInfo* info) {return (ColorEnum) info->user.u8[1];}
 float* getStarPosition(unsigned number); // forward declaration
 void InitPhysics() {
     using namespace nudge;
@@ -231,6 +232,7 @@ void InitPhysics() {
     // house (box)
     T.p[0]=-3.75f;T.p[1]=1.5f;T.p[2]=-1.0f;
     body = add_box(c,0.f,1.5f,1.5f,2.25f,&T);
+    c->bodies.properties[body].friction = 0.2f;
     bind_body(c,body,SHAPE_BOX,COLOR_IVORY);
 
     // house roof (box compound)
@@ -245,7 +247,7 @@ void InitPhysics() {
     // static cylinderY (box)
     T.p[0]=-1.65f;T.p[1]=1.2f;T.p[2]=-1.5f;
     body = add_box(c,0.f,0.2f,1.25f,0.2f,&T);
-    bind_body(c,body,SHAPE_CYLINDER_Y,COLOR_LIGHTBLUE);
+    bind_body(c,body,SHAPE_CYLINDER_Y,COLOR_LIGHTBLUE);    
 
     // long cylinderZ / capsuleZ (compound: 1 box + 2 or 3 spheres)
     T.p[0]=0.65f;T.p[1]=4.2f;T.p[2]=-1.5f;
@@ -453,7 +455,6 @@ void InitPhysics() {
     bind_body(c,body,SHAPE_TEAPOT,COLOR_LIGHTSKYBLUE);
     c->bodies.filters[body].collision_group = COLLISION_GROUP_E;   // group the body belongs to
     c->bodies.filters[body].collision_mask = COLLISION_GROUP_ALL & (~COLLISION_GROUP_A);    // groups the body can collide with (all except bodies of group A)
-
     // (kinematic animation test: door) [automatic kinematic body test]
     {
         // -> kinematic body creation
@@ -524,6 +525,8 @@ void InitPhysics() {
     // cTs[0].p[1]=-sCs[2]*0.5f;cTs[3].p[1]=chdim[1]-sCs[2]*0.5f;cTs[4].p[1]=cTs[3].p[1]-sCs[3]*1.f;
     // cTs[1].p[1]=-chdim[1]+sCs[0];cTs[1].p[0]=chdim[0]*0.4f;;cTs[2].p[1]=-chdim[1]+sCs[1];cTs[2].p[0]=-chdim[0]*0.4f;
     // body = add_compound(c,cmass,NULL,1,bC,&cTs[0],4,sCs,&cTs[1],&T);
+    // or a traditional capsule (wrong scaling, but I want to test the staircase with it)
+    //body = extra::add_compound_capsule(c,cmass,1.5f*chdim[0],1.5f*(chdim[1]-chdim[0]),&T);
     bind_body(c,body,SHAPE_CHARACTER,globals.bodies.num_stars<12?COLOR_YELLOW:COLOR_ORANGE);
     globals.bodies.character_body = body;assert(body==c->bodies.transforms[body].body);
     float* in_inv = c->bodies.properties[body].inertia_inverse;in_inv[0]=in_inv[1]=in_inv[2]=0.f;
@@ -638,6 +641,21 @@ void InitPhysics() {
     c->bodies.properties[body].friction = 2.f;
     c->bodies.filters[body].flags|=BF_IS_PLATFORM;  // test (toggle and see the difference on character)
 
+    const int test_staircase = 0; // experiment (removed because character can't climb it)
+    if (test_staircase) {
+        // static staircase (experiment)
+        const float sts_hdim[3] = {1.f,2.0f,3.f};   // +z is the first step; -z the top step
+        const int sts_num_steps = 20; // note that this number is hard-coded in SHAPE_STAIRCASE_Z_15_STEPS
+        T=identity_transform;T.p[2]=0.5f;T.p[0]=-14.f;T.p[1]=sts_hdim[1];//nm_QuatFromAngleAxis(T.q,M_PI*0.5f,0,1,0);
+        body = extra::add_compound_staircase(c,0.f,sts_hdim[0],sts_hdim[1],sts_hdim[2],sts_num_steps,&T);
+        bind_body(c,body,SHAPE_STAIRCASE_20_STEPS,COLOR_BEIGE);
+        c->bodies.properties[body].friction = 0.f;
+
+        T=identity_transform;T.p[2]=-3.f;T.p[0]=-14.f;T.p[1]=sts_hdim[1];
+        body = add_box(c,0.f,sts_hdim[0],sts_hdim[1],sts_hdim[0]*0.5f,&T);
+        bind_body(c,body,SHAPE_BOX,COLOR_BEIGE);
+        c->bodies.properties[body].friction = 1.5f;
+    }
 
     // another moving platform here: [rotating platform test] (box)
     {
@@ -679,7 +697,7 @@ void InitPhysics() {
         ka->loop_mode = KinematicData::Animation::LM_LOOP_NORMAL;
         ka->body = body;
         ka->use_baseT = true; ka->baseT = c->bodies.transforms[body];nm_QuatFromAngleAxis(ka->baseT.q,M_PI*1.5f,0,1,0);   // unless key frame Transforms are in the absolute space, this must always be set
-        ka->speed = 0.f;    // we'll set the speed dynamically when c->bodies.infos[body].aux_bodies[1]!=0 (we'll set that when the character is on it)
+        ka->speed = 0.f;    // we'll set the speed dynamically when c->bodies.infos[body].sk_user.i8[3]!=0 (we'll set that when the character is on it)
         ka->play_time = ka->offset_time = 0.f;
         ka->playing = true; // we could trigger this instead of ka->speed... but it's almost the same
 
@@ -826,12 +844,18 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
             //const bool character_is_on_something = aux_body>=0;
             const bool character_must_jump = aux_body>=0 && (state_key_pressed&KEY_J);
             const bool character_is_on_platform =  aux_body>=0 && (c->bodies.filters[aux_body].flags&BF_IS_PLATFORM);
+
+            // experimental (needs a LOT of work: character get stuck and WSJ stop working sometimes)
+            const bool character_is_against_static_obstacle = (aux_body==-1) && info->aux_bodies[1]>=0;
+            //if (aux_body>=0) glprintf("character_is_against_ground\n");
+            //if (character_is_against_static_obstacle) glprintf("character_is_against_static_obstacle!\n");
+
             if (character_must_jump) {
                 const float amount = 5.f;
                 c->bodies.momentum[globals.bodies.character_body].velocity[1]+=amount;
                 if (c->bodies.filters[globals.bodies.character_body].flags&BF_IS_DYNAMIC) c->bodies.idle_counters[globals.bodies.character_body]=0;  // wakes up body (dynamic body only)
             }
-            else if ((state_key_down&KEY_WASD) || character_is_on_platform)   {
+            else if (((state_key_down&KEY_WASD) || character_is_on_platform) && !character_is_against_static_obstacle)   {
                 Transform tr = *T;   // copy
                 if (state_key_down&(KEY_A|KEY_D)) {
                     const float amount = 0.05f*((state_key_down&KEY_A)?1.0f:-1.0f);
@@ -853,11 +877,12 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
                     // Note that this allows only walking on planar surfaces... Y movement of everything about 'character ehm controller' has not be handled...
                     const float amount = 0.05f*((state_key_down&KEY_W)?1.f:-0.5f);
                     float angle,axis[3];nm_QuatToAngleAxis(tr.rotation,&angle,axis);
-                    angle*=axis[1]; // can be 1 or -1 AFAICS
+                    angle*=axis[1]; // axis[1] can be 1 or -1 AFAICS
                     const float sinangle=amount*sinf(angle),cosangle=amount*cosf(angle);
-                    //SDL_Log("Angle axis:%1.3f; {%1.3f,%1.3f,%1.3f}\n",angle,axis[0],axis[1],axis[2]);
+                    //glprintf("Angle axis:%1.3f; {%1.3f,%1.3f,%1.3f}\n",angle,axis[0],axis[1],axis[2]);
                     tr.position[0] = T->position[0] + sinangle;
                     tr.position[2] = T->position[2] + cosangle;
+                    //glprintf("axis[1]=%1.2f x+=%1.4f; z+=%1.4f;\n",axis[1],sinangle,cosangle);
                 }
 
                 // 2) assign the new transform with this function [From a (separated) newT: -> T=newT and linear/angular velocities updated to improve collision detection]
@@ -871,7 +896,8 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
                 float* velocity = c->bodies.momentum[globals.bodies.character_body].velocity;
                 const float oldVelocity[3] = {velocity[0],velocity[1],velocity[2]};
                 TransformAssignToBody(c,T->body,tr,globals.instantFrameTime,character_is_on_platform?aux_body:-1);   // This wakes up body if dynamic too
-                velocity[1] = oldVelocity[1];  // velocityY is necessary to make jumping work better
+                //if (aux_body==-1 || globals.key.down_last_frame&KEY_J)
+                    velocity[1] = oldVelocity[1];  // velocityY is necessary to make jumping work better
                 //*velocityY = c->bodies.momentum[aux_body].velocity[1];
                 /*if (!(state_key_down&KEY_WASD)) {
                     velocity[0]=c->bodies.momentum[aux_body].velocity[0];
@@ -910,19 +936,24 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
         using namespace nudge;
         const ContactData* cd = &c->contact_data;
         assert(c && cd);
-        //unsigned num_wrong_contacts=0;
         for (unsigned i = 0; i < cd->count; i++) {
             const unsigned a = cd->bodies[i].a, b = cd->bodies[i].b;
             const BodyFilter *a_filter = &c->bodies.filters[a], *b_filter = &c->bodies.filters[b];
-            //if (a_filter->flags&BF_IS_DISABLED || b_filter->flags&BF_IS_DISABLED) ++num_wrong_contacts;
-            if (a==b) continue; // Not sure if/why this happens
-            /*const int a_dynamic = (a_filter->flags&BF_IS_DYNAMIC);
-               const int b_dynamic = (b_filter->flags&BF_IS_DYNAMIC);
-               const int sum_dynamic = a_dynamic+b_dynamic;
-               if (sum_dynamic==0) continue;   // Why this case is present in the first place? */
-            //const uint64_t tag = cd->tags[i];
 
-            //assert(a_filter->flags&BF_IS_DYNAMIC || b_filter->flags&BF_IS_DYNAMIC);
+            //assert(a!=b && !(a_filter->flags&BF_IS_DISABLED_OR_REMOVED) && !(b_filter->flags&BF_IS_DISABLED_OR_REMOVED)); // seems to be always true in my tests (OK)
+
+            //assert(a_filter->flags&BF_IS_DYNAMIC || b_filter->flags&BF_IS_DYNAMIC); // asserts
+            //assert(((a_filter->flags | b_filter->flags) & BF_IS_DYNAMIC) == BF_IS_DYNAMIC);   // same as above (!=0 works here, because BF_IS_DYNAMIC is one-bit mask)
+
+            //assert(!((a_filter->flags&BF_IS_STATIC_OR_KINEMATIC) && (b_filter->flags&BF_IS_STATIC_OR_KINEMATIC))); // asserts
+            //assert(((a_filter->flags | b_filter->flags) & BF_IS_STATIC_OR_KINEMATIC) != BF_IS_STATIC_OR_KINEMATIC); // same as above
+            //assert(((a_filter->flags&b_filter->flags)&BF_IS_STATIC_OR_KINEMATIC)==0);   // not the same as above; asserts only if a and b are both static or both kinematic
+            if (
+                ((a_filter->flags&BF_IS_STATIC_OR_KINEMATIC) && (b_filter->flags&BF_IS_STATIC_OR_KINEMATIC)) // this should not happen, but sometimes it happens. Why?
+                || a==b || (a_filter->flags&BF_IS_DISABLED_OR_REMOVED) || (b_filter->flags&BF_IS_DISABLED_OR_REMOVED) // this never happens, but for robustness we leave it
+                ) continue;
+            //assert(a_filter->flags&BF_IS_DYNAMIC || b_filter->flags&BF_IS_DYNAMIC);   // now OK
+
             // sensor test ------------
             if (a_filter->flags&BF_IS_SENSOR || b_filter->flags&BF_IS_SENSOR)  {
                 unsigned detected_body = NUDGE_INVALID_BODY_ID;
@@ -956,17 +987,47 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
                     }
                 }
                 else {
-                    int16_t* character_aux_body = &c->bodies.infos[character].aux_bodies[0];
-                    if (*character_aux_body==-1)    {
+                    int16_t* character_aux_bodies = &c->bodies.infos[character].aux_bodies[0];
+                    const int detect_static_obstacle = (globals.key.down&(KEY_W|KEY_S)) && character_aux_bodies[1]==-1 && (c->bodies.filters[other_body].flags&BF_IS_STATIC_OR_KINEMATIC) && other_body!=(unsigned)character_aux_bodies[0];
+                    if (character_aux_bodies[0]==-1 || detect_static_obstacle)    {
                         // Check if contact is below 'character', and set aux_body for 'character'
                         // cd->data->position and T->position are in world space
                         // we assume contact normal is in the world space... (it makes no sense, because it should depend on the order of the two bodies, but it works)
                         // actually we are just testing: contact->normal[1]<-0.95f AFAICS, so the normal points down not up...
                         // we should do extensive tests to understand if body order is random or if static/kinematic vs dynamic has a specific order, etc...
                         const Contact* contact = &cd->data[i];
-                        const float dot_down =  contact->normal[0]*0+contact->normal[1]*-1+contact->normal[2]*0;  // TODO: Better dot between contact->normal and body gravity (and normalize)
-                        const int is_on_ground = (a_is_character&&dot_down>0.95f) || (b_is_character&&dot_down<-0.95f);   // TODO: Never tested the second part (I always have a_is_character)
-                        if (is_on_ground) *character_aux_body=(int16_t) other_body;
+                        if (character_aux_bodies[0]==-1) {
+                            const float dot_down =  contact->normal[0]*0+contact->normal[1]*-1+contact->normal[2]*0;  // TODO: Better dot between contact->normal and body gravity (and normalize)
+                            const int is_on_ground = (a_is_character&&dot_down>0.9f) || (b_is_character&&dot_down<-0.9f);
+                            if (is_on_ground) {
+                                character_aux_bodies[0]=(int16_t) other_body;
+                                //glprintf("Ground! char_body=%c normal:{%1.2f,%1.2f,%1.2f}; dot_down=%1.2f;\n",a_is_character?'a':'b',contact->normal[0],contact->normal[1],contact->normal[2],dot_down);
+                                // results:
+                                /* On static ground (body 0): a_is_character, contact->normal:{0,-1,0}, dot_down= 1
+                                 * On a dynamic cube:         b_is_character, contact->normal:{0, 1,0}, dow_down=-1
+                                 * so the contact normal direction is from a_body to b_body
+                                */
+                            }
+                        }
+                        if (detect_static_obstacle) {
+                            float vel_norm[3];// suboptimal, we could store it outside the loop
+                            //const float* vel = c->bodies.momentum[character].velocity;
+                            //const float speed = nm_Vec3Normalized(vel_norm,vel);
+                            nm_QuatGetAxisZ(vel_norm,c->bodies.transforms[character].q);if (globals.key.down&KEY_S) {vel_norm[0]=-vel_norm[0];vel_norm[1]=-vel_norm[1];vel_norm[2]=-vel_norm[2];};
+                            const float dot_vel =  contact->normal[0]*vel_norm[0]+contact->normal[1]*vel_norm[1]+contact->normal[2]*vel_norm[2];
+                            const int is_in_direction = (a_is_character&&(dot_vel>0.15f)) || (b_is_character&&(dot_vel<-0.15f));
+                            if (is_in_direction) {
+                                character_aux_bodies[1]=(int16_t) other_body;
+                                //glprintf("Obstacle! char_body=%c normal:{%1.2f,%1.2f,%1.2f}; dot_vel=%1.2f;\n",a_is_character?'a':'b',contact->normal[0],contact->normal[1],contact->normal[2],dot_vel);
+                                // results:
+                                /* On static ground (body 0): a_is_character, contact->normal:{0,-1,0}, dot_down= 1
+                                 * On a dynamic cube:         b_is_character, contact->normal:{0, 1,0}, dow_down=-1
+                                 * so the contact normal direction is from a_body to b_body
+                                */
+                            }
+                            //glprintf("Obstacle! char_body=%c normal:{%1.2f,%1.2f,%1.2f}; dot_vel=%1.2f; speed=%1.3f;\n",a_is_character?'a':'b',contact->normal[0],contact->normal[1],contact->normal[2],dot_vel,speed);
+
+                        }
                     }
                 }
             }
@@ -1103,6 +1164,7 @@ void DrawPhysics()  {
             case SHAPE_SKITTLE:
             case SHAPE_TEAPOT:
             case SHAPE_STAR:
+            case SHAPE_STAIRCASE_20_STEPS:
             case SHAPE_CHARACTER:
             {
                 glScalef(aabb_hextents[0],aabb_hextents[1],aabb_hextents[2]);
@@ -1289,7 +1351,7 @@ void DrawPhysics()  {
 
 
     // Dbg: draw another aabb on c->active_bodies (for better understanding what this array is)
-    const int dbg_draw_aabb_around_bodies_in_the_active_array = 0;
+    const int dbg_draw_aabb_around_bodies_in_the_active_array = 1;
     if (dbg_draw_aabb_around_bodies_in_the_active_array
             && !globals.use_graphic_transform
             )
@@ -1723,10 +1785,13 @@ static void GlutFakeDrawGL(void) 	{glutDisplayFunc(GlutDrawGL);}
 
 
 int main(int argc, const char* argv[]) {
-    assert(sizeof(Keys)/sizeof(Keys[0])==KEY_NUM_REGULAR_KEYS);
-    assert(sizeof(SpecialKeys)/sizeof(SpecialKeys[0])==KEY_NUM_SPECIAL_KEYS);
-    assert(sizeof(ModifierKeys)/sizeof(ModifierKeys[0])==KEY_NUM_MODIFIER_KEYS);
-    assert(sizeof(MouseKeys)/sizeof(MouseKeys[0])==KEY_NUM_MOUSE_KEYS);
+    NUDGE_STATIC_ASSERT(sizeof(Keys)/sizeof(Keys[0])==KEY_NUM_REGULAR_KEYS);
+    NUDGE_STATIC_ASSERT(sizeof(SpecialKeys)/sizeof(SpecialKeys[0])==KEY_NUM_SPECIAL_KEYS);
+    NUDGE_STATIC_ASSERT(sizeof(ModifierKeys)/sizeof(ModifierKeys[0])==KEY_NUM_MODIFIER_KEYS);
+    NUDGE_STATIC_ASSERT(sizeof(MouseKeys)/sizeof(MouseKeys[0])==KEY_NUM_MOUSE_KEYS);
+
+    NUDGE_STATIC_ASSERT(COLOR_COUNT<=255);
+    NUDGE_STATIC_ASSERT(SHAPE_COUNT<=255);
 
     nudge::show_info();
 		
@@ -2232,6 +2297,26 @@ void glDrawHollowCylinderX(float R,float r,float height,int slices=8,bool center
 void glDrawHollowCylinderY(float R,float r,float height,int slices=8,bool center_in_height=false) {glDrawHollowCylinder(R,r,height,slices,1,center_in_height);}
 void glDrawHollowCylinderZ(float R,float r,float height,int slices=8,bool center_in_height=false) {glDrawHollowCylinder(R,r,height,slices,2,center_in_height);}
 
+void glDrawStaircase(float hdepth=1.f,float hheight=1.f,float hlength=1.f,int num_steps=15,int axis=2) {
+    // +z is the first step; -z the top step
+    assert(num_steps>0);assert(axis>=0 && axis<=2);
+    int axisi[3] = {0,1,2};
+    if (axis==0) {axisi[0]=2;axisi[1]=1;axisi[2]=0;}
+    else if (axis==1) {axisi[0]=0;axisi[1]=2;axisi[2]=1;}
+    const float step_hheight = hheight/(float)(num_steps);
+    const float step_hlen = hlength/(float)(num_steps);
+    for (int i=0;i<num_steps;i++) {
+        float hs[3];hs[axisi[0]]=hdepth;hs[axisi[1]]=step_hheight;hs[axisi[2]]=hlength-(float)i*step_hlen;
+        float p[3]={0.f,0.f,0.f};p[axisi[1]]=-hheight+step_hheight+step_hheight*2.f*(float)i;
+        p[axisi[2]]=-step_hlen*(float)i; // invert sign to mirror staircase on the z-axis
+        glPushMatrix();
+        glTranslatef(p[0],p[1],p[2]);
+        glScalef(hs[0],hs[1],hs[2]);
+        drawShape(SHAPE_BOX);
+        glPopMatrix();
+    }
+}
+
 void compileDisplayLists() {
 	for (int shape=0;shape<SHAPE_COUNT;shape++) {
 	GLuint* pdl = &globals.display_lists[shape];
@@ -2482,6 +2567,9 @@ void compileDisplayLists() {
         glScalef(0.54f,0.225f,1.0f);
         glRotatef(30.f,0,0,1);
         glDrawCylinderZ(4.f,5.5f,3,true);
+        break;
+    case SHAPE_STAIRCASE_20_STEPS:
+        glDrawStaircase(1.f,1.f,1.f,20,2);
         break;
     case SHAPE_PIVOT3D_CENTER: glutSolidSphere(0.06,8,8);
         break;

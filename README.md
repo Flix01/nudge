@@ -28,12 +28,14 @@ This 2024 version ([GitHub](https://github.com/Flix01/nudge/tree/master)) is jus
 
 ![example](./screenshots/example02.png)
 
+Both examples require the glut library (or freeglut)
+
 ## Building
 - Being a header-only library, all that is required is to define **NUDGE_IMPLEMENTATION** in a .cpp file before including _"nudge.h"_
 - The library works only with SIMD enabled: the recommended requirements are **AVX2** and **FMA**; the minimum requirement is just **SSE2**. In many cases adding something like _--march=native_ in the compiler options is enough (in g++/clang++ syntax): _-march=haswell_ is probably better for independent builds.
 - **note** Running a SIMD-compiled program on hardware where SIMD is not supported is likely to cause RANDOM CRASHES.
 - **note** When using **emscripten**, _-msimd128_ must be added to the other command-line (simd) options (please read  [HERE](https://emscripten.org/docs/porting/simd.html)). However not all browsers support SIMD by default (without activating it someway): that's one of the main reasons of random crashes inside browsers.
-- **note** The [SIMDE](https://github.com/simd-everywhere/simde) library can be used to compile and run nudge replacing or removing SIMD support. One way to remove SIMD (through SIMDE) is to replace the SIMD compilation options with (g++/clang syntax): _-DUSE_SIMDE -DSIMDE_NO_NATIVE_ (optionally with: _-DSIMDE_ENABLE_OPENMP -fopenmp-simd_) [TODO: check if this still works] (of course there's a performance penalty).
+- **note** The [SIMDE](https://github.com/simd-everywhere/simde) library can be used to compile and run nudge replacing or removing SIMD support. One way to remove SIMD (through SIMDE) is to replace the SIMD compilation options with (g++/clang syntax): _-DUSE_SIMDE -DSIMDE_NO_NATIVE_ (optionally with: _-DSIMDE_ENABLE_OPENMP -fopenmp-simd_) [TODO: check if this still works] (of course we should expect a performance penalty without SIMD support).
 - The library documentation (recommended) can be generated with the **doxygen** command launched from the same folder as the _Doxyfile_ file
  
 ## Usage
@@ -43,8 +45,11 @@ This 2024 version ([GitHub](https://github.com/Flix01/nudge/tree/master)) is jus
 <summary>Here is a code snippet to get started with the library (users can easily extend it using the TODO sections)</summary>
 
 ```cpp
-// file: example01.cpp
+// file example01.cpp (in the ./example folder)
 // g++ example01.cpp -I../ -I./ -march=native -O3 -Wall -o example01
+// or using emscripten, with output in a subfolder named ./html :
+// em++ -O3 -msse2 -msimd128 -fno-rtti -fno-exceptions -o html/nudge_example01.html ./example01.cpp -I"./" -I"../"
+
 #define NUDGE_IMPLEMENTATION // [TODO 0] better do this in another cpp file to speed up recompilations
 #include "nudge.h"
 
@@ -135,8 +140,11 @@ c->bodies.filters[b].collision_group = nudge::COLLISION_GROUP_B;c->bodies.filter
 // => a doesn't want to collide with b, but b wants to collide with a
 ```
 How incoherent conditions are handled depends on the optional definition **NUDGE_COLLISION_MASKS_CONSISTENT** (undefined by default, can be defined before the NUDGE_IMPLEMENTATION definition).
-By default, in the code above, a and b do not collide AFAIR. Please note that by always using coherent conditions, collision behavior should not depend on the NUDGE_COLLISION_MASKS_CONSISTENT definition at all.
+By default, in the code above, a and b do not collide. Please note that by always using coherent conditions, collision behavior should not depend on the NUDGE_COLLISION_MASKS_CONSISTENT definition at all.
 
 </details>
 
+## LICENSE
+
+MIT license
 

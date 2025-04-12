@@ -24,7 +24,7 @@
 // [I'm not a physics engine expert at all, the mods I've made are just to ease my usage scenario]
 // [I've also probably decreased performance and broken something, so if you're a
 // physics engine expert, I suggest you base your mods on the original version]
-
+// Further info can be read in the doxygen comment below.
 
 
 /**
@@ -55,7 +55,7 @@
  * - The library works only with SIMD enabled: the recommended requirements are AVX2 and FMA; the minimum requirement is just SSE2. In many cases adding something like -march=native in the compiler options is enough (in g++/clang++ syntax): -march=haswell is probably better for independent builds.
  * - \note Running a SIMD-compiled program on hardware where SIMD is not supported is likely to cause RANDOM CRASHES.
  * - \note When using emscripten, -msimd128 must be added to the other command-line (simd) options (please read <a href="https://emscripten.org/docs/porting/simd.html">[HERE]</a>). However not all browsers support SIMD by default (without activating it someway): that's one of the main reasons of random crashes inside browsers.
- * - \note The <a href="https://github.com/simd-everywhere/simde">[SIMDE]</a> library can be used to compile and run nudge replacing or removing SIMD support. One way to remove SIMD (through SIMDE) is to replace the SIMD compilation options with (g++/clang syntax): -DUSE_SIMDE -DSIMDE_NO_NATIVE (optionally with: -DSIMDE_ENABLE_OPENMP -fopenmp-simd) [TODO: check if this still works] (of course there's a performance penalty without SIMD).
+ * - \note The <a href="https://github.com/simd-everywhere/simde">[SIMDE]</a> library can be used to compile and run nudge replacing or removing SIMD support. One way to remove SIMD (through SIMDE) is to replace the SIMD compilation options with (g++/clang syntax): -DUSE_SIMDE -DSIMDE_NO_NATIVE (optionally with: -DSIMDE_ENABLE_OPENMP -fopenmp-simd) [TODO: check if this still works] (of course we should expect a performance penalty without SIMD support).
  * - The library documentation (recommended) can be generated with the doxygen command launched from the same folder as the Doxyfile file.
  *
  * \section usage_sec Usage
@@ -63,8 +63,11 @@
  * Here is a code snippet to get started with the library (users can easily extend it using the TODO sections):
  *
  * \code
- * // file: example01.cpp
+ * // file example01.cpp (in the ./example folder)
  * // g++ example01.cpp -I../ -I./ -march=native -O3 -Wall -o example01
+ * // or using emscripten, with output in a subfolder named ./html :
+ * // em++ -O3 -msse2 -msimd128 -fno-rtti -fno-exceptions -o html/nudge_example01.html ./example01.cpp -I"./" -I"../"
+ *
  * #define NUDGE_IMPLEMENTATION // [TODO 0] better do this in another cpp file to speed up recompilations
  * #include "nudge.h"
  *
@@ -166,17 +169,30 @@
 #   error nudge.h is a c++ file and should be compiled as c++
 #elif __cplusplus < 201103L
 #   define NUDGE_NO_CPP11_DETECTED
-#   define NUDGE_CONSTEXPR const
-#   define NUDGE_STATIC_ASSERT(X,MESSAGE) assert(X) /*this needs <assert.h>, but I don't want to include it here*/
+#   define NUDGE_CONSTEXPRFNC /*no-op*/  /*never used in nudge.h*/
+#   define NUDGE_CONSTEXPR const  /*never used in nudge.h*/
+#   define NUDGE_STATIC_ASSERT_WITH_MESSAGE(X,MESSAGE) assert(X) /*this needs <assert.h>, but I don't want to include it here*/
 #   undef NUDGE_USE_INT32_ENUMS
 #   define NUDGE_USE_INT32_ENUMS    // if set: bigger enums (more space for body flags and collision groups: the BodyFilter struct is 3x bigger), but worse cache performance (note that bit operations are generally not faster with smaller types)
 //  Also note that there are still a few anonymous structs (that by standard require C++11 compilation),
 //  but in my tests both g++ and clang++ work just fine with -std=c++98
 //  In case of problems please define NUDGE_NO_ANONYMOUS_STRUCTS
 #else // c++11 detected
+#   define NUDGE_CONSTEXPRFNC constexpr /*never used in nudge.h*/
 #   define NUDGE_CONSTEXPR constexpr /*never used in nudge.h*/
-#   define NUDGE_STATIC_ASSERT(X,MESSAGE) static_assert((X), MESSAGE) /*no <assert.h> required; never used in nudge.h*/
+#   define NUDGE_STATIC_ASSERT_WITH_MESSAGE(X,MESSAGE) static_assert((X), MESSAGE) /*no <assert.h> required; never used in nudge.h*/
 #endif  // __cplusplus
+#define NUDGE_STATIC_ASSERT(X) NUDGE_STATIC_ASSERT_WITH_MESSAGE((X), "") /*never used in nudge.h*/
+
+#ifdef __SIZEOF_POINTER__
+#   define NUDGE_POINTER_SIZE ((__SIZEOF_POINTER__)*8) /* __SIZEOF_POINTER__ (gcc/clang) is in bytes */
+#elif defined(_WIN64) || defined(_M_X64)
+#   define NUDGE_POINTER_SIZE (64)
+#elif defined(_WIN32) || defined(_M_X86)
+#   define NUDGE_POINTER_SIZE (32)
+#else
+#   define NUDGE_POINTER_SIZE (0)
+#endif //__SIZEOF_POINTER__
 
 #ifdef NUDGE_USE_INT32_ENUMS
 #   undef NUDGE_COLLISION_MASK_TYPE
@@ -206,8 +222,15 @@ namespace nudge {
     /**
      * @brief Storage struct for user data (by default used inside \ref context_t "context_t"): a per-context 64-bit user space in 11 different variable names that share the same space, so that ONLY one of them must be chosen and used
      */
-    union UserData64Bit{
-        void* ptr;int64_t i64;uint64_t u64;double f64;int32_t i32[2];uint32_t u32[2];float f32[2];
+    union UserData64Bit{        
+#       if NUDGE_POINTER_SIZE==64
+        void* ptrs[1];
+#       endif
+        int64_t i64;uint64_t u64;double f64;
+#       if NUDGE_POINTER_SIZE==32
+        void* ptrs[2];
+#       endif
+        int32_t i32[2];uint32_t u32[2];float f32[2];
         int16_t i16[4];uint16_t u16[4];int8_t i8[8];uint8_t u8[8];
     };
     /**
@@ -282,9 +305,9 @@ namespace nudge {
      * @brief The Contact struct
      */
 	struct Contact {
-        float position[3];  /**< position of the contact in world space */
-        float penetration;  /**< amount of penetration */
-        float normal[3];    /**< contact normal in world space (not sure if this makes sense: it should be positive or negative according to the order of the two bodies, shouldn't it?) */
+        float position[3];  /**< position of the contact in world space coordinates */
+        float penetration;  /**< amount of contact penetration */
+        float normal[3];    /**< contact normal directed from the first body (\ref ContactData "c->contact_data.bodies.a") to the second body (\ref ContactData "c->contact_data.bodies.b"); it seems to be normalized AFAICS */
         float friction;     /**< contact friction */
 	};
     /**
@@ -363,7 +386,7 @@ namespace nudge {
 
     /**
      * @brief The BodyFlagEnum enum
-     * @note User can easily add custom flags this way: namespace nudge {const FlagMask BF_IS_MY_TYPE_1=1<<12,BF_IS_MY_TYPE_2=1<<13,BF_IS_MY_TYPE_3=1<<14,BF_IS_MY_TYPE_4=1<<15;}
+     * @note User can easily add custom flags this way: namespace nudge {const FlagMask BF_IS_MY_TYPE_1=1<<13,BF_IS_MY_TYPE_2=1<<14,BF_IS_MY_TYPE_3=1<<15;}
      * @note Flags marked [unused, not implemented] will never be implemented inside nudge.h
      * @note To understand how many entries are available, please see the \ref FlagMask "FlagMask doc" (by default they are at least 16)
      */
@@ -381,11 +404,12 @@ namespace nudge {
         BF_IS_DYNAMIC = 1<<5,    /**< read-only [internal flag added when bodies are added] */
         BF_NEVER_SLEEPING = 1<<6, /**< [experimental] affects only dynamic bodies */
         BF_HAS_DIFFERENT_GRAVITY_MODE = 1<<7, /**< [experimental] inverts the \ref GlobalDataMaskEnum "GF_USE_GLOBAL_GRAVITY" mode in \ref GlobalData "c->global_data.flags" on a per-body base */
+        BF_HAS_DIFFERENT_AUX_BODIES_RESET_MODE = 1<<8, /**< [experimental] inverts the \ref GlobalDataMaskEnum "GF_DONT_RESET_AUX_BODIES" mode in \ref GlobalData "c->global_data.flags" on a per-body base */
 #       ifndef NUDGE_BODYFLAG_ENUM_NO_UNUSED_FLAGS
-        BF_IS_CHARACTER = 1<<8, /**< [unused, not implemented, removable] flag added for user convenience */
-        BF_IS_PLATFORM = 1<<9,  /**< [unused, not implemented, removable] flag added for user convenience */
-        BF_IS_SENSOR = 1<<10,    /**< [unused, not implemented, removable] flag added for user convenience */
-        BF_IS_FRUSTUM_CULLED = 1<<11,    /**< [unused, not implemented, removable] flag added for user convenience */
+        BF_IS_CHARACTER = 1<<9, /**< [unused, not implemented, removable] flag added for user convenience */
+        BF_IS_PLATFORM = 1<<10,  /**< [unused, not implemented, removable] flag added for user convenience */
+        BF_IS_SENSOR = 1<<11,    /**< [unused, not implemented, removable] flag added for user convenience */
+        BF_IS_FRUSTUM_CULLED = 1<<12,    /**< [unused, not implemented, removable] flag added for user convenience */
         BF_IS_DISABLED_OR_REMOVED_OR_FRUSTUM_CULLED = BF_IS_DISABLED_OR_REMOVED|BF_IS_FRUSTUM_CULLED, /**< [unused, not implemented, removable] flag added for user convenience */
 #       endif
         BF_IS_STATIC_OR_KINEMATIC = BF_IS_STATIC|BF_IS_KINEMATIC,   /**< read-only [internal flag] */
@@ -418,10 +442,12 @@ namespace nudge {
         int16_t first_sphere_index; /**< the index of the first sphere collider in \ref ColliderData "ColliderData::spheres" (sphere colliders are assumed to be contiguous, with no fragmentation), or -1 */
     };
 
+
+
     /**
      * @brief The BodyInfo struct contains some read-only graphic properties of the body (e.g. axis aligned bounding box and center of mass offset), and plenty of per-body user available space, handy to bind user-side structs to a nudge physic body
      * @note User custom field injection is allowed by the two definitions NUDGE_BODYINFO_STRUCT_EXTRA_FIELDS and NUDGE_BODYINFO_STRUCT_EXTRA_PADDING; the best place to do so is in a nudge config header file (setting its name in the project-scope definition: NUDGE_USER_CFG_FILE_NAME)
-     * @note It's possible to remove the default (per-body) UserData32Bit user field of this struct using the definition NUDGE_BODYINFO_STRUCT_NO_USER_DATA, and the 'aux_bodies[...]' array by setting the NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES definition to zero
+     * @note It's possible to remove the default (per-body) UserData32Bit user field of this struct using the definition NUDGE_BODYINFO_STRUCT_NO_USER_DATA, and the 'aux_bodies[...] array / sk_user struct' by setting the NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES definition to zero
      */
     struct BodyInfo {
 #       ifndef NUDGE_BODYINFO_STRUCT_NO_USER_DATA
@@ -439,13 +465,27 @@ namespace nudge {
 #       endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES
 #       if NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES>0
         union {
-            int16_t aux_bodies[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES]; /**< user data that can be used for dynamic bodies ONLY, and that are reset to -1 every frame (but only for dynamic bodies in the \ref ActiveBodies "c->active_bodies" list); they can be used to store body indices, since they are currently in the [0,8192) range */
+            int16_t aux_bodies[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES]; /**< user data that by default can be used for dynamic bodies ONLY, and that are reset to -1 every frame (but only for dynamic bodies in the \ref ActiveBodies "c->active_bodies" list); they can be used to store body indices, since they are currently in the [0,8192) range */
             union {
+#               if (NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES%4)==0
+#               if NUDGE_POINTER_SIZE==64
+                void* ptrs[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES/4]; /**< user data that can be used for static and kinematic bodies only (and only one of its array variants) */
+#               endif
+                int64_t i64[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES/4]; /**< user data that can be used for static and kinematic bodies only (and only one of its array variants) */
+                uint64_t u64[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES/4]; /**< user data that can be used for static and kinematic bodies only (and only one of its array variants) */
+#               endif
+#               if (NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES%2)==0
+#               if NUDGE_POINTER_SIZE==32
+                void* ptrs[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES/2]; /**< user data that can be used for static and kinematic bodies only (and only one of its array variants) */
+#               endif
+                int32_t i32[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES/2]; /**< user data that can be used for static and kinematic bodies only (and only one of its array variants) */
+                uint32_t u32[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES/2]; /**< user data that can be used for static and kinematic bodies only (and only one of its array variants) */
+#               endif
                 int16_t i16[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES]; /**< user data that can be used for static and kinematic bodies only (and only one of its array variants) */
                 uint16_t u16[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES]; /**< user data that can be used for static and kinematic bodies only (and only one of its array variants) */
                 int8_t i8[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES*2];  /**< user data that can be used for static and kinematic bodies only (and only one of its array variants) */
                 uint8_t u8[NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES*2]; /**< user data that can be used for static and kinematic bodies only (and only one of its array variants) */
-            } sk_user; /**< user data that can be used for static and kinematic bodies ONLY (and only one of the available array variants) */
+            } sk_user; /**< user data that by default can be used for static and kinematic bodies ONLY (and only one of the available array variants); using \ref GlobalDataMaskEnum "c->global_data.flags" and/or per-body \ref BodyFlagEnum "c->bodies.filters[body].flags" we can use this field for dynamic bodies too, at the expense of the "aux_bodies" field */
         };
 #       endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES
 #       ifdef NUDGE_BODYINFO_STRUCT_EXTRA_PADDING
@@ -590,7 +630,8 @@ namespace nudge {
      * @brief The GlobalDataMaskEnum enum
      */
     enum GlobalDataMaskEnum {
-        GF_USE_GLOBAL_GRAVITY = 1<<0    /**< this flag disables per-body gravity and uses \ref GlobalData "GlobalData::gravity" instead (disabled by default) */
+        GF_USE_GLOBAL_GRAVITY = 1<<0,    /**< this flag disables per-body gravity and uses \ref GlobalData "GlobalData::gravity" instead (disabled by default) */
+        GF_DONT_RESET_AUX_BODIES = 1<<1  /**< if set nudge avoids resetting per-body \ref BodyInfo "BodyInfo::aux_bodies[]" (to -1) every frame (valid for dynamic bodies in the \ref ActiveBodies "c->active_bodies" list only): this allows the use of the \ref BodyInfo "BodyInfo::sk_user" field for dynamic bodies too (disabled by default) */
 #       ifdef NUDGE_GLOBALDATAMASK_ENUM_EXTRA_FIELDS
 #           define NUDGE_GLOBALDATAMASK_ENUM_EXTRA_FIELDS
 #       endif
@@ -618,7 +659,7 @@ namespace nudge {
 
         BodyData bodies;    /**< accessor to the main physics data of the library */
         ColliderData colliders; /**< accessor to the (global) collider (i.e. collision shape) (box and sphere) arrays. These arrays can be reordered by nudge, but their 'tags' are unique and are automatically assigned and preserved (please NEVER touch them); it's NOT safe to store array indices in colliders.boxes or collider.spheres! Always use c->bodies.infos[body].first_box_index and c->bodies.infos[body].num_boxes instead (same for spheres) */
-        ContactData contact_data;   /**< accessor to the array of contacts, so that users can understand if a body is in contact with another. Please note that only dynamic non-sleeping bodies are guaranteed to report all their contact every frame AFAIK */
+        ContactData contact_data;   /**< accessor to the array of contacts, so that users can understand if a body is in contact with another. Please note that only dynamic non-sleeping bodies are guaranteed to report all their contacts every frame AFAIK */
 
         ContactCache contact_cache; /**< accessor to the persistent (across frames) CachedContactImpulses that are used to implement warmstarting (used to slightly improved stacking AFAIK); users should simply ignore it */
         ActiveBodies active_bodies; /**< accessor to an array of active bodies. AFAICU this array has something to do with bodies that have contacts between them (however for some strange reason even sleeping bodies can be in the list). I personally prefer using the official c->bodies array (more robust and thrustable) */
@@ -1035,7 +1076,7 @@ namespace nudge {
      */
 
     /**
-     * @brief Adds a new body to the simulation with a compound collider that represent a prism of 4 or more lateral faces
+     * @brief Adds a new body to the simulation with a compound collider that represents a prism of 4 or more lateral faces
      * @param c the nudge context
      * @param mass positive => dynamic; 0 => static; negative => kinematic (where the absolute value will be used as mass internally)
      * @param radius the radius of the cylinder inscribed into the prism (the prism covers all the inscribed cylinder); please use (radius*cosf(M_PI/num_lateral_faces)) as radius for a prism that is entirely covered by the cylinder of radius: radius
@@ -1056,7 +1097,7 @@ namespace nudge {
      */
     unsigned add_compound_prism(context_t* c, float mass, float radius, float hheight, unsigned num_lateral_faces, const float* mMatrix16WithoutScaling, AxisEnum axis=AXIS_Y, const float comOffset[3]=NULL);
     /**
-     * @brief Adds a new body to the simulation with a compound collider that represent a cylinder
+     * @brief Adds a new body to the simulation with a compound collider that represents a cylinder
      * @param c the nudge context
      * @param mass positive => dynamic; 0 => static; negative => kinematic (where the absolute value will be used as mass internally)
      * @param radius the radius of the cylinder
@@ -1078,7 +1119,7 @@ namespace nudge {
      */
     unsigned add_compound_cylinder(context_t* c,float mass,float radius,float hheight, const float* mMatrix16WithoutScaling,AxisEnum axis=AXIS_Y,unsigned num_boxes=0,unsigned num_spheres=0,const float comOffset[3]=NULL, float box_lateral_side_shrinking=-1.f);
     /**
-     * @brief Adds a new body to the simulation with a compound collider that represent a capsule
+     * @brief Adds a new body to the simulation with a compound collider that represents a capsule
      * @param c the nudge context
      * @param mass positive => dynamic; 0 => static; negative => kinematic (where the absolute value will be used as mass internally)
      * @param radius the radius of the capsule
@@ -1099,7 +1140,7 @@ namespace nudge {
      */
     unsigned add_compound_capsule(context_t* c,float mass,float radius,float hheight, const float* mMatrix16WithoutScaling,AxisEnum axis=AXIS_Y,unsigned num_boxes=1,unsigned num_spheres=3,const float comOffset[3]=NULL, float box_lateral_side_shrinking=-1.f);
     /**
-     * @brief Adds a new body to the simulation with a compound collider that represent the hollow lateral surface of a cylinder
+     * @brief Adds a new body to the simulation with a compound collider that represents the hollow lateral surface of a cylinder
      * @param c the nudge context
      * @param mass positive => dynamic; 0 => static; negative => kinematic (where the absolute value will be used as mass internally)
      * @param min_radius the minimum radius that starts at the center of the cylinder
@@ -1120,7 +1161,7 @@ namespace nudge {
      */
     unsigned add_compound_hollow_cylinder(context_t* c,float mass,float min_radius,float max_radius,float hheight, const float* mMatrix16WithoutScaling, AxisEnum axis=AXIS_Y, unsigned num_boxes=8, const float comOffset[3]=NULL);
     /**
-     * @brief Adds a new body to the simulation with a compound collider that represent a torus
+     * @brief Adds a new body to the simulation with a compound collider that represents a torus
      * @param c the nudge context
      * @param mass positive => dynamic; 0 => static; negative => kinematic (where the absolute value will be used as mass internally)
      * @param radius the radius that starts at the origin of the shape and ends in the middle of the rotational donut-like solid
@@ -1140,7 +1181,7 @@ namespace nudge {
      */
     unsigned add_compound_torus(context_t* c,float mass,float radius,float inner_radius, const float* mMatrix16WithoutScaling,AxisEnum axis=AXIS_Y,unsigned num_boxes=8,const float comOffset[3]=NULL);
     /**
-     * @brief Adds a new body to the simulation with a compound collider that represent an approximated cone
+     * @brief Adds a new body to the simulation with a compound collider that represents an approximated cone
      * @param c the nudge context
      * @param mass positive => dynamic; 0 => static; negative => kinematic (where the absolute value will be used as mass internally)
      * @param radius the radius of the cone
@@ -1160,6 +1201,29 @@ namespace nudge {
      * @param mMatrix16WithoutScaling a pointer to a 4x4 column-major matrix with only translation and rotation
      */
     unsigned add_compound_cone(context_t* c, float mass, float radius, float hheight, const float* mMatrix16WithoutScaling, AxisEnum axis=AXIS_Y, unsigned num_boxes=0, unsigned num_spheres=0, const float comOffset[3]=NULL);
+
+    /**
+     * @brief Adds a new body to the simulation with a compound collider that represents a staircase; please note that the inertia is not calculated (or even approximated) correctly (only relevant when used as dynamic body)
+     * @param c the nudge context
+     * @param mass positive => dynamic; 0 => static; negative => kinematic (where the absolute value will be used as mass internally)
+     * @param hdepth the half depth of the staircase
+     * @param hheight the half height of the staircase
+     * @param hlength the half length of the staircase
+     * @param num_steps the number of the steps and of the boxes to consume (0 is replaced by some predefined value)
+     * @param T a pointer to a Transform
+     * @param orientation_in_0_3 the height of the staircase is always aligned to AXIS_Y: if orientation_in_0_3==0 the front of the staircase is along +AXIS_Z; successive values rotate it of 90 degrees clockwise
+     * @param comOffset an optional array of 3 floats that determines the center of mass offset of the body
+     * @return the body index, or \ref NUDGE_INVALID_BODY_ID "NUDGE_INVALID_BODY_ID" if not enough colliders can be added
+     * @note This function is just a wrapper around the \ref add_compound "add_compound(...)" function
+     * @note When mass is positive, the inertia is calculated using the shape axis aligned bounding box (i.e. it's wrong)
+     */
+    unsigned add_compound_staircase(context_t* c,float mass, float hdepth, float hheight, float hlength, unsigned num_steps=15, const Transform* T=NULL, int orientation_in_0_3=0, const float comOffset[3]=NULL);
+    /**
+     * @overload
+     * @param mMatrix16WithoutScaling a pointer to a 4x4 column-major matrix with only translation and rotation
+     */
+    unsigned add_compound_staircase(context_t* c,float mass, float hdepth, float hheight, float hlength, unsigned num_steps, const float* mMatrix16WithoutScaling, int orientation_in_0_3=0, const float comOffset[3]=NULL);
+
 
 
     /** @} */ // end of extra_group
@@ -1490,7 +1554,7 @@ namespace nudge {
 
     /**
      * @defgroup inertia_group Inertia Calculation Functions
-     * @brief Helper functions to calculate the inertia vector of a body (to feed \ref add_compound "add_compound(...)"), or its inverse (to feed c->bodies.properties[body].inertia_inverse directly)
+     * @brief Helper functions to calculate the inertia vector of a body (to feed \ref add_compound "add_compound(...)"), or its inverse (to feed \ref BodyProperties "c->bodies.properties[body].inertia_inverse" directly)
      * @{
      */
     void calculate_box_inertia(float result[3],float mass,float hsizex,float hsizey,float hsizez,const float comOffset[3]=NULL);
@@ -3540,6 +3604,7 @@ void restart_context(context_t* c) {
         m->total_time = m->play_time = -1.f;
         m->speed = 1.f;
     }
+    const int must_reset_aux_bodies = (c->global_data.flags&GF_DONT_RESET_AUX_BODIES) ? 0 : 1;
     for (unsigned i=0;i<c->MAX_NUM_BODIES;i++)    {
         BodyInfo* info = &c->bodies.infos[i];
         BodyProperties* property = &c->bodies.properties[i];
@@ -3556,7 +3621,7 @@ void restart_context(context_t* c) {
         filter->collision_group=COLLISION_GROUP_DEFAULT;
         filter->collision_mask=COLLISION_GROUP_ALL;
 #       if NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES>0
-        for (int ab=0;ab<NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES;ab++) info->aux_bodies[ab] = -1;
+        if (must_reset_aux_bodies) memset(&info->aux_bodies,0xFF,NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES*sizeof(int16_t));   // sets all components to -1
 #       endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES
     }
 
@@ -4591,15 +4656,14 @@ unsigned add_compound_capsule(context_t* c, float mass, float radius, float hsiz
     return add_compound(c,mass,inertia,num_boxes,box_hsizes,boxT,num_spheres,sphere_radii,sphereT,T,comOffset,stripped_center);
 }
 unsigned add_compound_hollow_cylinder(context_t* c,float mass,float min_radius,float max_radius,float hsize, const Transform* T,AxisEnum axis,unsigned num_boxes,const float comOffset[3])  {
-    const unsigned num_spheres = 0;assert(min_radius<max_radius);
+    const unsigned num_spheres = 0;assert(min_radius<max_radius);if (num_boxes==0) num_boxes=8;
     const float radius = (max_radius+min_radius)*0.5f,inner_radius=(max_radius-min_radius)*0.5f;
     Arena arena = c->arena;assert(arena.size>num_boxes*(3*sizeof(float)+sizeof(Transform))+num_spheres*(1*sizeof(float)+sizeof(Transform))+128);
     const float axisv[3] = {(axis==AXIS_X)?1.f:0.f,(axis==AXIS_Y)?1.f:0.f,(axis==AXIS_Z)?1.f:0.f};
     int axisi[3] = {0,1,2};
     if (axis==AXIS_X) {axisi[0]=2;axisi[1]=0;axisi[2]=1;}
     else if (axis==AXIS_Z) {axisi[0]=1;axisi[1]=2;axisi[2]=0;}
-    float* box_hsizes = NULL;Transform* boxT=NULL;
-    if (num_boxes==0) num_boxes=8;
+    float* box_hsizes = NULL;Transform* boxT=NULL;    
     if (num_boxes>0) {
         const float box_length = max_radius*tanf(M_PI/(float)num_boxes);
         box_hsizes = allocate_array<float>(&arena, num_boxes*3, 32);
@@ -4634,14 +4698,13 @@ unsigned add_compound_hollow_cylinder(context_t* c,float mass,float min_radius,f
     return add_compound(c,mass,inertia,num_boxes,box_hsizes,boxT,num_spheres,sphere_radii,sphereT,T,comOffset,stripped_center);
 }
 unsigned add_compound_torus(context_t* c,float mass,float radius,float inner_radius, const Transform* T,AxisEnum axis,unsigned num_boxes,const float comOffset[3])   {
-    const unsigned num_spheres = 0;assert(inner_radius<=radius);
+    const unsigned num_spheres = 0;assert(inner_radius<=radius);if (num_boxes==0) num_boxes=8;
     Arena arena = c->arena;assert(arena.size>num_boxes*(3*sizeof(float)+sizeof(Transform))+num_spheres*(1*sizeof(float)+sizeof(Transform))+128);
     const float axisv[3] = {(axis==AXIS_X)?1.f:0.f,(axis==AXIS_Y)?1.f:0.f,(axis==AXIS_Z)?1.f:0.f};
     int axisi[3] = {0,1,2};
     if (axis==AXIS_X) {axisi[0]=2;axisi[1]=0;axisi[2]=1;}
     else if (axis==AXIS_Z) {axisi[0]=1;axisi[1]=2;axisi[2]=0;}
     float* box_hsizes = NULL;Transform* boxT=NULL;
-    if (num_boxes==0) num_boxes=8;
     if (num_boxes>0) {
         const float box_length = (radius+inner_radius)*tanf(M_PI/(float)num_boxes);
         box_hsizes = allocate_array<float>(&arena, num_boxes*3, 32);
@@ -4731,31 +4794,55 @@ unsigned add_compound_cone(context_t* c, float mass, float radius, float hheight
     return add_compound(c,mass,inertia,num_boxes,box_hsizes,boxT,num_spheres,sphere_radii,sphereT,T,comOffset,stripped_center);
 }
 unsigned add_compound_prism(context_t* c, float mass, float radius, float hsize, unsigned num_lateral_faces, const float* mMatrix16WithoutScaling, AxisEnum axis, const float comOffset[3]) {
-    if (!mMatrix16WithoutScaling)   return add_compound_prism(c,mass,radius,hsize,num_lateral_faces,(const Transform*)NULL);
+    if (!mMatrix16WithoutScaling)   return add_compound_prism(c,mass,radius,hsize,num_lateral_faces,(const Transform*)NULL,axis,comOffset);
     else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_compound_prism(c,mass,radius,hsize,num_lateral_faces,&T,axis,comOffset);}
 }
 unsigned add_compound_cylinder(context_t* c, float mass, float radius, float hsize, const float* mMatrix16WithoutScaling, AxisEnum axis, unsigned num_boxes, unsigned num_spheres, const float comOffset[3], float box_lateral_side_shrinking) {
-    if (!mMatrix16WithoutScaling)   return add_compound_cylinder(c,mass,radius,hsize,(const Transform*)NULL);
+    if (!mMatrix16WithoutScaling)   return add_compound_cylinder(c,mass,radius,hsize,(const Transform*)NULL,axis,num_boxes,num_spheres,comOffset,box_lateral_side_shrinking);
     else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_compound_cylinder(c,mass,radius,hsize,&T,axis,num_boxes,num_spheres,comOffset,box_lateral_side_shrinking);}
 }
 unsigned add_compound_capsule(context_t* c, float mass, float radius, float hsize, const float* mMatrix16WithoutScaling, AxisEnum axis, unsigned num_boxes, unsigned num_spheres, const float comOffset[3], float box_lateral_side_shrinking)    {
-    if (!mMatrix16WithoutScaling)   return add_compound_capsule(c,mass,radius,hsize,(const Transform*)NULL);
+    if (!mMatrix16WithoutScaling)   return add_compound_capsule(c,mass,radius,hsize,(const Transform*)NULL,axis,num_boxes,num_spheres,comOffset,box_lateral_side_shrinking);
     else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_compound_capsule(c,mass,radius,hsize,&T,axis,num_boxes,num_spheres,comOffset,box_lateral_side_shrinking);}
 }
 unsigned add_compound_hollow_cylinder(context_t* c,float mass,float min_radius,float max_radius,float hsize,const float* mMatrix16WithoutScaling,AxisEnum axis,unsigned num_boxes,const float comOffset[3])    {
-    if (!mMatrix16WithoutScaling)   return add_compound_hollow_cylinder(c,mass,min_radius,max_radius,hsize,(const Transform*)NULL);
+    if (!mMatrix16WithoutScaling)   return add_compound_hollow_cylinder(c,mass,min_radius,max_radius,hsize,(const Transform*)NULL,axis,num_boxes,comOffset);
     else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_compound_hollow_cylinder(c,mass,min_radius,max_radius,hsize,&T,axis,num_boxes,comOffset);}
 }
 unsigned add_compound_torus(context_t* c,float mass,float radius,float inner_radius, const float* mMatrix16WithoutScaling,AxisEnum axis,unsigned num_boxes,const float comOffset[3]) {
-    if (!mMatrix16WithoutScaling)   return add_compound_torus(c,mass,radius,inner_radius,(const Transform*)NULL);
+    if (!mMatrix16WithoutScaling)   return add_compound_torus(c,mass,radius,inner_radius,(const Transform*)NULL,axis,num_boxes,comOffset);
     else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_compound_torus(c,mass,radius,inner_radius,&T,axis,num_boxes,comOffset);}
 }
 unsigned add_compound_cone(context_t* c, float mass, float radius, float hheight, const float* mMatrix16WithoutScaling, AxisEnum axis, unsigned num_boxes, unsigned num_spheres, const float comOffset[3])    {
-    if (!mMatrix16WithoutScaling)   return add_compound_cone(c,mass,radius,hheight,(const Transform*)NULL);
+    if (!mMatrix16WithoutScaling)   return add_compound_cone(c,mass,radius,hheight,(const Transform*)NULL,axis,num_boxes,num_spheres,comOffset);
     else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_compound_cone(c,mass,radius,hheight,&T,axis,num_boxes,num_spheres,comOffset);}
 }
 
+unsigned add_compound_staircase(context_t* c,float mass, float hdepth, float hheight, float hlength, unsigned num_steps, const Transform* T, int orientation_in_0_3, const float comOffset[3]) {
+    if (num_steps<=0) num_steps=15;
+    Arena arena = c->arena;assert(arena.size>num_steps*(3*sizeof(float)+sizeof(Transform))+128);
+    int axisi[3] = {0,1,2};if (orientation_in_0_3<0) orientation_in_0_3=-orientation_in_0_3;orientation_in_0_3%=4;const float sign = orientation_in_0_3<2?-1.f:1.f;
+    if (orientation_in_0_3%2==1) {axisi[0]=2;axisi[1]=1;axisi[2]=0;}
+    float* box_hsizes = NULL;Transform* boxT=NULL;
+    const float step_hheight = hheight/(float)(num_steps);
+    const float step_hlen = hlength/(float)(num_steps);
+    if (num_steps>0) {
+        box_hsizes = allocate_array<float>(&arena, num_steps*3, 32);
+        boxT = allocate_array<Transform>(&arena, num_steps, 32);
+        for (unsigned i=0;i<num_steps;i++) {
+            float* hs = &box_hsizes[3*i];Transform* t = &boxT[i];*t=identity_transform;
+            hs[axisi[0]]=hdepth;hs[axisi[1]]=step_hheight;hs[axisi[2]]=hlength-(float)i*step_hlen;
+            t->p[axisi[1]]=-hheight+step_hheight+step_hheight*2.f*(float)i;
+            t->p[axisi[2]]=sign*step_hlen*(float)i; // invert sign to mirror staircase on the z-axis
+        }
+    }
+    return add_compound(c,mass,NULL,num_steps,box_hsizes,boxT,0,NULL,NULL,T,comOffset,NULL);
+}
+unsigned add_compound_staircase(context_t* c, float mass, float hdepth, float hheight, float hlength, unsigned num_steps, const float* mMatrix16WithoutScaling, int orientation_in_0_3, const float comOffset[3]) {
+    if (!mMatrix16WithoutScaling)   return add_compound_staircase(c,mass,hdepth,hheight,hlength,num_steps,(const Transform*)NULL,orientation_in_0_3,comOffset);
+    else {Transform T;Mat4WithoutScalingToTransform(&T,mMatrix16WithoutScaling);return add_compound_staircase(c,mass,hdepth,hheight,hlength,num_steps,&T,orientation_in_0_3,comOffset);}
 
+}
 
 } // namespace extra
 // ------------
@@ -5222,6 +5309,7 @@ void simulate(context_t* c,float timeStep, unsigned numSubSteps, unsigned numIte
         float damping_angular = 1.0f - timeStep*c->simulation_params.angular_damping;
         const float* pGravity[2] = {c->global_data.gravity,NULL};
         const int gravityIdx = (c->global_data.flags&GF_USE_GLOBAL_GRAVITY) ? 0 : 1;
+        const int must_reset_aux_bodies = (c->global_data.flags&GF_DONT_RESET_AUX_BODIES) ? 0 : 1;
         for (unsigned i = 0; i < c->active_bodies.count; ++i) {
             const unsigned index = c->active_bodies.indices[i];
             //const BodyFilter* filter = &c->bodies.filters[index];
@@ -5239,7 +5327,8 @@ void simulate(context_t* c,float timeStep, unsigned numSubSteps, unsigned numIte
                 if (flags&BF_NEVER_SLEEPING) c->bodies.idle_counters[index]=0;   // prevents sleeping
 
 #               if NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES>0
-                memset(&c->bodies.infos[index].aux_bodies,0xFF,NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES*sizeof(int16_t));    // sets all components to -1
+                const int must_reset = (flags&BF_HAS_DIFFERENT_AUX_BODIES_RESET_MODE)?(!must_reset_aux_bodies):must_reset_aux_bodies;
+                if (must_reset) memset(&c->bodies.infos[index].aux_bodies,0xFF,NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES*sizeof(int16_t));    // sets all components to -1
 #               endif // NUDGE_BODYINFO_STRUCT_NUM_AUX_BODIES
             }
         }
@@ -8063,7 +8152,9 @@ void collide(context_t* c,BodyConnections body_connections)  {
             unsigned a = collider_bodies[pair & 0xffff];
             unsigned b = collider_bodies[pair >> 16];
 
-            if (a == b) {
+            if (a == b
+                     //|| ((c->bodies.filters[a].flags&c->bodies.filters[b].flags)&BF_IS_STATIC_OR_KINEMATIC)  // new: test (tested: it does nothing!)
+                    ) {
                 ++removed;
                 continue;
             }
