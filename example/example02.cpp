@@ -1351,7 +1351,7 @@ void DrawPhysics()  {
 
 
     // Dbg: draw another aabb on c->active_bodies (for better understanding what this array is)
-    const int dbg_draw_aabb_around_bodies_in_the_active_array = 1;
+    const int dbg_draw_aabb_around_bodies_in_the_active_array = 0;
     if (dbg_draw_aabb_around_bodies_in_the_active_array
             && !globals.use_graphic_transform
             )
