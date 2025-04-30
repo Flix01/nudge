@@ -7,7 +7,6 @@ Nudge is a small data-oriented and SIMD-optimized 3D rigid body physics library 
 This 2024 version ([GitHub](https://github.com/Flix01/nudge/tree/master)) is just an **attempt** to ease user experience, by embedding part of the original demo code into the library itself, and extending some of its functionalities.
 
 > **Note:** Most of the physics-related stuff has been kept intact, so the new version does not improve stuff in this area.
-> **Note:** The original version is available in the [original_version](https://github.com/Flix01/nudge/tree/master/original_version) sudfolder of this repository too.
 
 ## Features
 - Single file `nudge.h`
