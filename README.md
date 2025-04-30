@@ -24,7 +24,8 @@ This 2024 version ([GitHub](https://github.com/Flix01/nudge/tree/master)) is jus
 ![example](./screenshots/example.png)
 
 <b>example/example02.cpp or example/example03.cpp</b> (_example03.cpp_ is currently just a cut-down version of _example02_ compatible with emscripten)
-Click of this screenshoot for a <b>WebGL version of the demo</b> (a desktop PC is recommended):
+
+Click this screenshoot for a <b>WebGL version of the demo</b> (a desktop PC is recommended):
  
 <a href="https://flix01.github.io/emscripten/nudge/nudge_example03.html" target="_blank"><img src="./screenshots/example02.png"></a>
 
