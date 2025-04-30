@@ -24,18 +24,20 @@ This 2024 version ([GitHub](https://github.com/Flix01/nudge/tree/master)) is jus
 
 ![example](./screenshots/example.png)
 
-<b>example/example02.cpp:</b> 
+<b>example/example02.cpp or example/example03.cpp</b> (_example03.cpp_ is currently just a cut-down version of _example02_ compatible with emscripten)
+Click of this screenshoot for a <b>WebGL version of the demo</b> (a desktop PC is recommended):
+ 
+<a href="https://flix01.github.io/emscripten/nudge/nudge_example03.html" target="_blank"><img src="./screenshots/example02.png"></a>
 
-![example](./screenshots/example02.png)
-
-Both examples require the glut library (or freeglut)
+All these examples require the glut library (or freeglut) to be compiled.
 
 ## Building
-- Being a header-only library, all that is required is to define **NUDGE_IMPLEMENTATION** in a .cpp file before including _"nudge.h"_
+- Being a header-only library, all that is required is to define **NUDGE_IMPLEMENTATION** in a .cpp file before including _"nudge.h"_.
 - The library works only with SIMD enabled: the recommended requirements are **AVX2** and **FMA**; the minimum requirement is just **SSE2**. In many cases adding something like _--march=native_ in the compiler options is enough (in g++/clang++ syntax): _-march=haswell_ is probably better for independent builds.
 - **note** Running a SIMD-compiled program on hardware where SIMD is not supported is likely to cause RANDOM CRASHES.
-- **note** When using **emscripten**, _-msimd128_ must be added to the other command-line (simd) options (please read  [HERE](https://emscripten.org/docs/porting/simd.html)). However not all browsers support SIMD by default (without activating it someway): that's one of the main reasons of random crashes inside browsers.
-- **note** The [SIMDE](https://github.com/simd-everywhere/simde) library can be used to compile and run nudge replacing or removing SIMD support. One way to remove SIMD (through SIMDE) is to replace the SIMD compilation options with (g++/clang syntax): _-DUSE_SIMDE -DSIMDE_NO_NATIVE_ (optionally with: _-DSIMDE_ENABLE_OPENMP -fopenmp-simd_) [TODO: check if this still works] (of course we should expect a performance penalty without SIMD support).
+- **note** When compiling using **emscripten**, something that works for me (at least when I'm writing this) is: _-msse2 -msimd128 -s STACK_SIZE=512kb -s ALLOW_MEMORY_GROWTH=1_ (the first two flags set up SIMD support, the last two are not mandatory, but necessary in most cases, expecially the latter, to ensure that the program has enough memory to run, and to prevent crashes at startup inside browsers). However not all browsers support SIMD by default (without activating it someway): that's one of the reasons of random crashes inside browsers, after the program starts.
+- **note** Note that **emscripten** does not support _FMA_ as far as I know, so something like: _-mavx2 -msimd128_ does not compile (_nudge.h_ seems to use _AVX2_ only with _FMA_).
+- **note** The [SIMDE](https://github.com/simd-everywhere/simde) library can be used to compile and run nudge replacing or removing SIMD support. One way to remove SIMD (through SIMDE) is to replace the SIMD compilation options with (g++/clang syntax): _-DUSE_SIMDE -DSIMDE_NO_NATIVE_ (optionally with: _-DSIMDE_ENABLE_OPENMP -fopenmp-simd_) [tested: it works when I'm writing this (hopefully without SIMD)]. Of course we should expect a performance penalty when running without SIMD support (but in any case consider that there's always an overhead when running something inside a web browser).
 - The library documentation (recommended) can be generated with the **doxygen** command launched from the same folder as the _Doxyfile_ file
  
 ## Usage
@@ -48,7 +50,7 @@ Both examples require the glut library (or freeglut)
 // file example01.cpp (in the ./example folder)
 // g++ example01.cpp -I../ -I./ -march=native -O3 -Wall -o example01
 // or using emscripten, with output in a subfolder named ./html :
-// em++ -O3 -msse2 -msimd128 -fno-rtti -fno-exceptions -o html/nudge_example01.html ./example01.cpp -I"./" -I"../"
+// em++ -O3 -msse2 -msimd128 -fno-rtti -fno-exceptions -s ALLOW_MEMORY_GROWTH=1 -o html/nudge_example01.html ./example01.cpp -I"./" -I"../"
 
 #define NUDGE_IMPLEMENTATION // [TODO 0] better do this in another cpp file to speed up recompilations
 #include "nudge.h"
@@ -74,7 +76,7 @@ int main() {
         // Update simulation
         const unsigned substeps = pre_simulation_step(&c, elapsed_time_from_previous_frame_in_seconds);   // mandatory call (substeps are the number of physic frames that are going to be performed in simulation_step(...))
         if (substeps > 0) {
-            // here you can move manually kinematic bodies for example, using nudge::TransformAssignToBody(...)
+            // here you can manually move kinematic bodies, for example, using nudge::TransformAssignToBody(...)
         }
         simulation_step(&c);  // mandatory call (main function of the library)
 

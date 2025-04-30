@@ -1312,7 +1312,7 @@ void DrawPhysics()  {
         glColor3f(0.4f,0.0f,0.0f);
         glPushMatrix();
         glMultMatrixf(mMatrix);
-        glTranslatef(aabb_center[0],aabb_center[1],aabb_center[2]); // optional
+        glTranslatef(aabb_center[0],aabb_center[1],aabb_center[2]);
         glScalef(aabb_hextents[0],aabb_hextents[1],aabb_hextents[2]);
         drawShape(SHAPE_AABB);
         glPopMatrix();
@@ -1361,16 +1361,15 @@ void DrawPhysics()  {
         glColor3f(0.8f,0.8f,0.8f);
         for (unsigned i=0;i<c->active_bodies.count;i++) {
             const unsigned body = c->active_bodies.indices[i];
-            if (c->bodies.filters[body].flags&BF_IS_FRUSTUM_CULLED) continue;
+            const BodyFilter* filter = &c->bodies.filters[body];
+            if (filter->flags&BF_IS_FRUSTUM_CULLED) continue;
             const BodyInfo* info = &c->bodies.infos[body];
-            const float* aabb_hextents = info->aabb_half_extents;   // 3-floats array
-            const float* aabb_center = info->aabb_center;   // 3-floats array (note that here we don't have to strip info->comOffset: we should when using calculate_graphic_transform_for_body(...) to get mMatrix)
             float mMatrix[16];TransformToMat4(mMatrix,&c->bodies.transforms[body]);
 
             glPushMatrix();
             glMultMatrixf(mMatrix);
-            glTranslatef(aabb_center[0],aabb_center[1],aabb_center[2]); // optional
-            glScalef(aabb_hextents[0],aabb_hextents[1],aabb_hextents[2]);
+            glTranslatef(info->aabb_center[0],info->aabb_center[1],info->aabb_center[2]);
+            glScalef(info->aabb_half_extents[0],info->aabb_half_extents[1],info->aabb_half_extents[2]);
             drawShape(SHAPE_AABB);
             glPopMatrix();
         }

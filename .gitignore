@@ -87,12 +87,15 @@ example/example02
 example/example03
 example/Makefile
 example/linux/example*
-example/win/example*
 example/mac/example*
 nudge_examples.pro
 nudge_examples.pro.user
 deps/
 emscripten/
+example/example03_include/meshes/
+simde/
+simde
+original_version/
 
 
 

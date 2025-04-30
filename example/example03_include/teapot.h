@@ -32,11 +32,10 @@
 //#define TEAPOT_SHADER_SPECULAR // Adds specular light component in the shader and Teapot_SetColorSpecular(...) function
 //#define TEAPOT_SHADER_FOG // Adds linear fog in the shader and Teapot_SetFogColor(...) Teapot_SetFogDistances(...) functions
 //#define TEAPOT_SHADER_FOG_HINT_FRAGMENT_SHADER // Changes the fog quality a bit (used only when TEAPOT_SHADER_FOG is defined)
-//#define TEAPOT_SHADER_USE_NORMAL_MATRIX  // (slow) accurate normal calculations when the model(view) matrix has some scaling applied (instead of using Teapot_SetScaling(...)).
-//                                            But, overall, I think that leaving this definition out and just using Teapot_SetScaling(...) and orthonormal mvMatrices (= no glScalef(...)),
-//                                            is accurate enough, faster, and easier to use too. NOTE that you probably need to CHANGE something in your code if you switch this definition on/off.
+//#define TEAPOT_SHADER_USE_ACCURATE_NORMALS  // (a bit slower). It replaces TEAPOT_SHADER_USE_NORMAL_MATRIX from version 1.2 (with code based on https://lxjk.github.io/2017/10/01/Stop-Using-Normal-Matrix.html).
+//#define TEAPOT_SHADER_HINT_ACCURATE_NORMALS_GPU   // used only when TEAPOT_SHADER_USE_ACCURATE_NORMALS is defined. Not sure if it's faster or not.
 //#define TEAPOT_SHADER_USE_SHADOW_MAP      // Eases shadow mapping by supporting the second pass of the algorithm.
-//#define TEAPOT_SHADER_SHADOW_MAP_PCF 4    // (optional, but needs a value>0, otherwise will be set to zero). Basically when TEAPOT_SHADER_USE_SHADOW_MAP is defined, PCF filter used (dynamic_resolution.h can automatically set this value when DYNAMIC_RESOLUTION_SHADOW_USE_PCF is used).
+//#define TEAPOT_SHADER_SHADOW_MAP_PCF 4    // (optional, but needs a value>0, otherwise will be set to zero). Basically when TEAPOT_SHADER_USE_SHADOW_MAP is defined, PCF filter is used (dynamic_resolution.h can automatically set this value when DYNAMIC_RESOLUTION_SHADOW_USE_PCF is used).
 //                                          // Warning: when TEAPOT_SHADER_SHADOW_MAP_PCF is used with emscripten, it needs: -s USE_WEBGL2=1
 //
 //#define TEAPOT_MAX_NUM_USER_MESH_VERTICES (3000)  // (experimental) default is 1000. Needed when, using Teapot_Set_Init_UserMeshCallback(...), you overflow the number of vertices. Warning: the max number of vertices for ALL meshes (= embedded + user) can't be bigger than 65535, because the indices are unsigned short.
@@ -48,7 +47,12 @@
 //
 //#define TEAPOT_USE_SIMD					// (experimental) speeds up Teapot_Helper_MultMatrix(...) using SIMD (about 1.5x-2x when compiled with -O3 -DNDEBUG -march=native), Requires -msse (OR -mavx when using double precision).
 //
-//#define TEAPOT_MESHDATA_HAS_MMATRIX_PTR   // (untested) handy when using Teapot_MeshData + some kind of physic engine that already stores a mMatrix16 somewhere.
+//#define TEAPOT_MESHDATA_HAS_MMATRIX_PTR   // (untested) handy when using Teapot_MeshData + some kind of physics engine that already stores a mMatrix16 somewhere.
+
+//
+// EMSCRIPTEN USAGE HINT:
+//
+// Teapot_Init(...) requires a good stack size: please compile with at least: -sSTACK_SIZE=512kb
 
 #ifndef TEAPOT_H_
 #define TEAPOT_H_
@@ -59,7 +63,7 @@ extern "C" {
 #endif
 
 #ifndef TEAPOT_VERSION
-#   define TEAPOT_VERSION 1.1
+#   define TEAPOT_VERSION 1.24
 #endif //TEAPOT_VERSION
 
 
@@ -119,6 +123,12 @@ typedef double tpoat;
 #   endif //DYNAMIC_RESOLUTION_SHADOW_USE_PCF
 #endif //TEAPOT_SHADER_SHADOW_MAP_PCF
 
+
+#ifdef TEAPOT_SHADER_USE_NORMAL_MATRIX  // deprecated from version 1.2
+#undef TEAPOT_SHADER_USE_ACCURATE_NORMALS
+#define TEAPOT_SHADER_USE_ACCURATE_NORMALS
+#endif
+
 typedef enum {
     TEAPOT_MESH_TEAPOT=0,
     TEAPOT_MESH_ARROW,
@@ -126,10 +136,11 @@ typedef enum {
     TEAPOT_MESH_CAR,                    // TEAPOT_NO_MESH_CAR_WHEELS can be defined to strip wheels
     TEAPOT_MESH_CHAIR,
     TEAPOT_MESH_CHARACTER,
-    TEAPOT_MESH_GHOST,
     TEAPOT_MESH_SKITTLE,
     TEAPOT_MESH_SLEDGE,
     TEAPOT_MESH_TABLE,
+    TEAPOT_MESH_STAR,
+    TEAPOT_MESH_HOLLOW_CYLINDER,
     TEAPOT_MESH_TORUS,
     TEAPOT_MESH_USER_00,                // TEAPOT_MESH_USER_XX meshes must be entered through Teapot_Set_Init_UserMeshCallback(...) before calling Teapot_Init(...)
     TEAPOT_MESH_USER_01,
@@ -163,14 +174,19 @@ typedef enum {
     TEAPOT_MESH_USER_29,
     TEAPOT_MESH_CUBE,
     TEAPOT_MESH_CUBIC_GROUND,           // Top face is made by 5x5 vertices
+    TEAPOT_MESH_CUBE_ROUNDED,
     TEAPOT_MESH_PLANE_X,
     TEAPOT_MESH_PLANE_Y,
     TEAPOT_MESH_PLANE_Z,
+    TEAPOT_MESH_STAR_2D,                // centered in the center of the bounding circle (not in its aabb)
     TEAPOT_MESH_CYLINDER,
     TEAPOT_MESH_CONE1,
     TEAPOT_MESH_CONE2,                  // Better quality
     TEAPOT_MESH_PYRAMID,
     TEAPOT_MESH_ROOF,
+    TEAPOT_MESH_GHOST,
+    TEAPOT_MESH_FLIPPER_RIGHT,
+    TEAPOT_MESH_FLIPPER_LEFT,
     TEAPOT_MESH_SPHERE1,
     TEAPOT_MESH_SPHERE2,                // Better quality
     TEAPOT_MESH_CAPSULE,                // Warning: this is special: itsHeight=scaling.y+(scaling.x+scaling.z)*0.5f; itsDiameter=(scaling.x+scaling.z)*0.5f; (this avoids non-uniform scaling)
@@ -180,7 +196,7 @@ typedef enum {
     TEAPOT_MESH_PIVOT3D,                // Warning: These is not centered when TEAPOT_CENTER_MESHES_ON_FLOOR is defined
     TEAPOT_MESH_TEXT_X,                 // Warning: These is not centered when TEAPOT_CENTER_MESHES_ON_FLOOR is defined
     TEAPOT_MESH_TEXT_Y,                 // Warning: These is not centered when TEAPOT_CENTER_MESHES_ON_FLOOR is defined
-    TEAPOT_MESH_TEXT_Z,                 // Warning: These is not centered when TEAPOT_CENTER_MESHES_ON_FLOOR is defined
+    TEAPOT_MESH_TEXT_Z,                 // Warning: These is not centered when TEAPOT_CENTER_MESHES_ON_FLOOR is defined    
     // GL_LINES starts here:
     TEAPOT_MESHLINES_CUBE_EDGES,        // Experimental GL_LINES
     TEAPOT_MESH_COUNT
@@ -201,6 +217,7 @@ void Teapot_Destroy(void);  // In your DestroyGL() method (cleanup)
 
 // In your InitGL() and ResizeGL() methods:
 void Teapot_SetProjectionMatrix(const tpoat pMatrix[16]);   // Sets the projection matrix [Warning: it calls glUseProgram(0); at the end => call it outside Teapot_PreDraw()/Teapot_PostDraw()]
+void Teapot_SetProjectionMatrixf(const float pMatrix[16]);   // Sets a float projection matrix [Warning: it calls glUseProgram(0); at the end => call it outside Teapot_PreDraw()/Teapot_PostDraw()]
 #ifdef TEAPOT_SHADER_FOG
 void Teapot_SetFogColor(float R, float G, float B);  // it should be the same as glClearColor() [Warning: it calls glUseProgram(0); at the end => call it outside Teapot_PreDraw()/Teapot_PostDraw()]
 void Teapot_SetFogDistances(float startDistance,float endDistance); // endDistance should be equal to the far clipping plane [Warning: it calls glUseProgram(0); at the end => call it outside Teapot_PreDraw()/Teapot_PostDraw()]
@@ -222,6 +239,10 @@ void Teapot_SetShadowVpMatrix(const tpoat unbiasedShadowVpMatrix[16]);  // MANDA
 void Teapot_SetShadowDarkening(float darkeningFactorIn_0_80,float shadowMinIntensityIn_0_1);    // Optional. Default values are (40.0f,0.75f). Warning: Do NOT call inside Teapot_PreDraw()/Teapot_PostDraw(): it sets glUseProgram(0) before exiting.
 void Teapot_GetViewMatrixInverse(tpoat* res16);				// Helper: (it's the camera matrix). Must be called AFTER Teapot_SetViewMatrixAndLightDirection(...)
 const tpoat* Teapot_GetViewMatrixInverseConstReference();   // Helper: (it's the camera matrix). Must be called AFTER Teapot_SetViewMatrixAndLightDirection(...)
+void Teapot_SetShadowMapFactor(float shadowMapResolutionFactorIn_0_1);
+void Teapot_SetShadowMapTexelIncrement(float shadowMapTexelIncrementX,float shadowMapTexelIncrementY);
+void Teapot_LowLevel_SetMvMatrixUniformWithShadowSupport(const tpoat mvMatrix[16]);
+void Teapot_LowLevel_SetMvMatrixUniformWithShadowSupportFloat(const float mvMatrix[16]);
 #endif //TEAPOT_SHADER_USE_SHADOW_MAP
 
 //------------------------------------------------------------------------------------
@@ -230,8 +251,10 @@ void Teapot_PreDraw(void);  // sets program and buffers for drawing
 
 void Teapot_SetColor(float R, float G, float B, float A);     // Optional (last set is used). A<1.0 requires glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); and glEnable(GL_BLEND); to make transparency work
 void Teapot_SetColorAmbient(float R, float G, float B);       // Optional (last set is used).
+void Teapot_SetColorAmbientAndDiffuse(const float ambient[3],const float diffuse[4]);// Optional (last set is used).
 #ifdef TEAPOT_SHADER_SPECULAR
 void Teapot_SetColorSpecular(float R, float G, float B, float SHI); // Optional (last set is used). If SHI<0, last valid call value is used
+void Teapot_SetColorAmbientDiffuseAndSpecular(const float ambient[3],const float diffuse[4],const float specular_plus_shininess[4]);// Optional (last set is used). If specular_plus_shininess[3]<0, last valid call value is used.
 #endif //TEAPOT_SHADER_SPECULAR
 
 void Teapot_SetScaling(float scalingX,float scalingY,float scalingZ);   // Optional (last set is used): it scales all the vertices, leaving the normals unaffected (a good perfomance/quality compromise)
@@ -239,8 +262,16 @@ void Teapot_SetScaling(float scalingX,float scalingY,float scalingZ);   // Optio
 // There are two Teapot_Draw functions:
 void Teapot_Draw(const tpoat mMatrix[16],TeapotMeshEnum meshId);        // (optionally repeat this call for multiple draws)
 void Teapot_Draw_Mv(const tpoat mvMatrix[16],TeapotMeshEnum meshId);    // (optionally repeat this call for multiple draws) Note that this is not the model matrix, but: Teapot_Helper_MultMatrix(mvMatrix,vMatrix,mMatrix)
+void Teapot_Draw_MvFloat(const float mvMatrix[16],TeapotMeshEnum meshId);    // [enforces float] (optionally repeat this call for multiple draws) Note that this is not the model matrix, but: Teapot_Helper_MultMatrix(mvMatrix,vMatrix,mMatrix)
 
-// There are two Teapot_DrawMulti functions:
+// These draw a wireframe AABB around the mesh (scaling3 can be NULL)
+void Teapot_DrawAabb(const tpoat mMatrix[16], TeapotMeshEnum meshId, const float *scaling3);
+void Teapot_DrawAabb_Mv(const tpoat mvMatrix[16],TeapotMeshEnum meshId,const float* scaling3);
+void Teapot_DrawAabb_MvFloat(const float mvMatrix[16],TeapotMeshEnum meshId,const float* scaling3);
+
+
+// You can use the Teapot_MeshData struct when you need mesh instances (and you don't need just to draw meshes on the fly)
+// Basically you instance an array of Teapot_MeshData structs and then call Teapot_DrawMulti/Teapot_DrawMulti_Mv to draw them
 typedef struct _Teapot_MeshData {
 #   ifdef TEAPOT_MESHDATA_HAS_MMATRIX_PTR
     const tpoat* mMatrix;   // Input for Teapot_DrawMulti(...) [Useful if your physic engine already provides a tpoat mMatrix[16] somewhere]
@@ -255,7 +286,12 @@ typedef struct _Teapot_MeshData {
     float colorAmbient[3];  // Skipped when Teapot_Color_Material is enabled
     float colorSpecular[4]; // Skipped when Teapot_Color_Material is enabled. Used only when TEAPOT_SHADER_SPECULAR is defined
     int outlineEnabled;     // 0 or 1
+    int active;             // 0 or 1
+#   ifdef TEAPOT_MESHDATA_STRUCT_EXTRA_FIELDS
+    TEAPOT_MESHDATA_STRUCT_EXTRA_FIELDS
+#   else
     void* userPtr;          // yours
+#   endif
 #   ifdef __cplusplus
     _Teapot_MeshData();
     virtual ~_Teapot_MeshData() {}  // In case we want to inherit from it in C++
@@ -272,15 +308,25 @@ static __inline void Teapot_MeshData_SetColorAmbient(Teapot_MeshData* md,float R
 #ifdef TEAPOT_SHADER_SPECULAR
 static __inline void Teapot_MeshData_SetColorSpecular(Teapot_MeshData* md,float R, float G, float B, float SHI) {md->colorSpecular[0]=R;md->colorSpecular[1]=G;md->colorSpecular[2]=B;md->colorSpecular[3]=SHI;}
 #endif //TEAPOT_SHADER_SPECULAR
+void Teapot_MeshData_GetAabbHalfExtents(const Teapot_MeshData* md,float* halfAabb);
+void Teapot_MeshData_GetAabbExtents(const Teapot_MeshData* md,float* aabb);
+void Teapot_MeshData_GetAabbCenter(const Teapot_MeshData* md,float* center);
 static __inline void Teapot_MeshData_SetOutlineEnabled(Teapot_MeshData* md,int meshOutlineEnabled) {md->outlineEnabled=meshOutlineEnabled;}
 static __inline void Teapot_MeshData_SetMeshId(Teapot_MeshData* md,TeapotMeshEnum meshId) {md->meshId = meshId;}
 void Teapot_MeshData_CalculateMvMatrix(Teapot_MeshData* md);    // From mMatrix (called internally when Teapot_DrawMulti(...) is used)
 void Teapot_MeshData_CalculateMvMatrixFromArray(Teapot_MeshData** meshes,int numMeshes);  // From mMatrix (called internally when Teapot_DrawMulti(...) is used)
-// I think the following function works only if no scaling is inside any Teapot_MeshData::mMatrix (But Teapot_MeshData_SetScaling(...) is OK):
 Teapot_MeshData* Teapot_MeshData_GetMeshUnderMouse(Teapot_MeshData* const* meshes,int numMeshes,int mouseX,int mouseY,const int* viewport4,tpoat* pOptionalDistanceOut);
+Teapot_MeshData* Teapot_MeshData_GetMeshUnderMouseFromRay(Teapot_MeshData* const* meshes, int numMeshes, const tpoat* rayOrigin3, const tpoat* rayDir3, tpoat* pOptionalDistanceOut);   /* ray in world space */
+
+tpoat* Teapot_Helper_ExtractMatrix3x3(tpoat* __restrict m9Out,const tpoat* __restrict m16,tpoat* __restrict optionalTranslation3Out/*=NULL*/);
+void Teapot_Helper_ExtractScalingFromTransformMatrix(const tpoat* __restrict m16,tpoat* __restrict scaOut3,tpoat* __restrict optionalMOut16);
 
 void Teapot_DrawMulti(Teapot_MeshData** meshes,int numMeshes,int mustSortObjectsForTransparency);  // 'mustSortObjectsForTransparency' requires glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); and  glDisable(GL_BLEND); At the end it restores glDisable(GL_BLEND); if used.
 void Teapot_DrawMulti_Mv(Teapot_MeshData* const* meshes,int numMeshes,int mustSortObjectsForTransparency);  // Same as above, but use it only if you set or calculate all the Teapot_MeshData::mvMatrix[16] manually
+
+void Teapot_MeshData_DrawAabb(const Teapot_MeshData* mesh);
+
+int Teapot_MeshData_Depth_Sorter(const void* pmd0,const void* pmd1);    // helper function used internally by Teapot_DrawMulti(...) when mustSortObjectsForTransparency==1  (for qsort)
 
 //----------------------------------------------------------------------------------------
 void Teapot_PostDraw(void); // unsets program and buffers for drawing
@@ -290,7 +336,8 @@ void Teapot_GetMeshAabbCenter(TeapotMeshEnum meshId,float center[3]);
 void Teapot_GetMeshAabbHalfExtents(TeapotMeshEnum meshId,float halfAabb[3]);
 void Teapot_GetMeshAabbExtents(TeapotMeshEnum meshId,float aabb[3]);
 void Teapot_GetMeshAabbMinAndMax(TeapotMeshEnum meshId,float aabbMin[3],float aabbMax[3]);
-
+void Teapot_GetMeshScaledAabbHalfExtents(TeapotMeshEnum meshId,float halfAabb[3],const float scaling[3]);
+void Teapot_GetMeshScaledAabbExtents(TeapotMeshEnum meshId,float aabb[3],const float scaling[3]);
 
 void Teapot_Enable_ColorMaterial(void);     // (*)
 void Teapot_Disable_ColorMaterial(void);
@@ -311,16 +358,11 @@ void Teapot_Set_MeshOutline_Color(float R,float G, float B, float A);	// A<1.0 r
 void Teapot_Set_MeshOutline_Scaling(float scalingGreaterOrEqualThanOne);    // default is 1.015f
 void Teapot_Set_MeshOutline_Params(float polygonOffsetSlope, float polygonOffsetConstant);  // defaults are -1.f, -250.f
 
-static __inline tpoat* Teapot_Helper_IdentityMatrix(tpoat* __restrict result16) {
-    tpoat* m = result16;
-    m[0]=m[5]=m[10]=m[15]=1;
-    m[1]=m[2]=m[3]=m[4]=m[6]=m[7]=m[8]=m[9]=m[11]=m[12]=m[13]=m[14]=0;
-    return result16;
-}
-static __inline void Teapot_Helper_CopyMatrix(tpoat* __restrict dst16,const tpoat* __restrict src16) {
-    int i;for (i=0;i<16;i++) dst16[i]=src16[i];
-}
-static __inline tpoat* Teapot_Helper_MultMatrixUncheckArgs(tpoat* __restrict result16,const tpoat* __restrict ml16,const tpoat* __restrict mr16) {	
+static __inline tpoat* Teapot_Helper_IdentityMatrix(tpoat* __restrict result16) {tpoat* m = result16;m[0]=m[5]=m[10]=m[15]=1;m[1]=m[2]=m[3]=m[4]=m[6]=m[7]=m[8]=m[9]=m[11]=m[12]=m[13]=m[14]=0;return result16;}
+static __inline tpoat* Teapot_Helper_IdentityMatrix3x3(tpoat* __restrict result9) {tpoat* m = result9;m[0]=m[4]=m[8]=1;m[1]=m[2]=m[3]=m[5]=m[6]=m[7]==0;return result9;}
+static __inline void Teapot_Helper_CopyMatrix(tpoat* __restrict dst16,const tpoat* __restrict src16) {int i;for (i=0;i<16;i++) dst16[i]=src16[i];}
+static __inline void Teapot_Helper_CopyMatrix3x3(tpoat* __restrict dst9,const tpoat* __restrict src9) {int i;for (i=0;i<9;i++) dst9[i]=src9[i];}
+static __inline tpoat* Teapot_Helper_MultMatrixUncheckArgs(tpoat* __restrict result16,const tpoat* __restrict ml16,const tpoat* __restrict mr16) {
 	int i,i4;   
 #	if (defined(TEAPOT_USE_SIMD) && !defined(TEAPOT_MATRIX_USE_DOUBLE_PRECISION) && defined(__SSE__))
     __m128 row1 = _mm_loadu_ps(&ml16[0]);
@@ -390,30 +432,41 @@ static __inline tpoat* Teapot_Helper_MultMatrix(tpoat* __restrict result16,const
 void Teapot_Helper_LookAt(tpoat* __restrict mOut16,tpoat eyeX,tpoat eyeY,tpoat eyeZ,tpoat centerX,tpoat centerY,tpoat centerZ,tpoat upX,tpoat upY,tpoat upZ);
 void Teapot_Helper_Perspective(tpoat* __restrict mOut16,tpoat degfovy,tpoat aspect, tpoat zNear, tpoat zFar);
 void Teapot_Helper_Ortho(tpoat* __restrict mOut16,tpoat left,tpoat right, tpoat bottom, tpoat top,tpoat nearVal,tpoat farVal);
+void Teapot_Helper_Ortho3D(tpoat* __restrict mOut16,tpoat cameraTargetDistance,tpoat degfovy,tpoat aspect,tpoat znear,tpoat zfar);
 tpoat* Teapot_Helper_TranslateMatrix(tpoat* __restrict mInOut16,tpoat x,tpoat y,tpoat z);
 tpoat* Teapot_Helper_RotateMatrix(tpoat* __restrict mInOut16,tpoat degAngle,tpoat x,tpoat y,tpoat z);
 tpoat* Teapot_Helper_ScaleMatrix(tpoat* __restrict mInOut16,tpoat x,tpoat y,tpoat z);
 int Teapot_Helper_InvertMatrix(tpoat* __restrict mOut16,const tpoat* __restrict m16);
-void Teapot_Helper_InvertMatrixFast(tpoat* __restrict mOut16,const tpoat* __restrict m16);
+void Teapot_Helper_InvertTransformMatrix(tpoat* __restrict mOut16,const tpoat* __restrict m16);
+void Teapot_Helper_InvertTransformMatrixFast(tpoat* __restrict mOut16,const tpoat* __restrict m16);
+tpoat* Teapot_Helper_ExtractMatrix3x3Inverse(tpoat* __restrict m9Out,const tpoat* __restrict m16);
+tpoat* Teapot_Helper_ExtractMatrix3x3InverseFast(tpoat* __restrict m9Out,const tpoat* __restrict m16);
+void Teapot_Helper_InvertTransformMatrixXZAxisInPlace(tpoat* __restrict m16);
+tpoat* Teapot_Helper_InvertTransformMatrixXZAxis(tpoat* __restrict mOut16,const tpoat* __restrict m16);
 void Teapot_Helper_GetFrustumPlaneEquations(tpoat planeEquationsOut[6][4],const tpoat* __restrict vpMatrix16,int normalizePlanes);
 void Teapot_Helper_GetFrustumPoints(tpoat frustumPoints[8][4],const tpoat* __restrict vpMatrixInverse16);   // frustumPoints[i][3]==1
-// 'optionalPMatrixInverse16' is required only if you need to retrieve (one or more of) the arguments that follow it (otherwise their value is untouched).
-void Teapot_Helper_GetLightViewProjectionMatrixExtra(tpoat* __restrict lvpMatrixOut16,
-                                                          const tpoat* __restrict cameraVMatrixInverse16,
-                                                          tpoat cameraNearClippingPlane,tpoat cameraFarClippingPlane,tpoat cameraFovyDeg,tpoat cameraAspectRatio,
-                                                          const tpoat*  __restrict normalizedLightDirection3, tpoat texelIncrement
-                                                          ,tpoat* __restrict optionalSphereCenterOut,tpoat* __restrict optionalSphereRadiiSquaredOut
+
+// returns the frustum radius (by value) and the scalar (positive) distance from the the camera eye to the frustum center (by 'pFrustumCenterDistanceOut').
+// 'cameraTargetDistanceForUnstableOrtho3DModeOnly_or_zero': the arg name is correct when the result is passed to 'Teapot_Helper_GetLightViewProjectionMatrix' functions.
+// Otherwise simply set it when using an ortho3D camera frustum (that needs a camera-target distance), or just set it to zero.
+tpoat Teapot_Helper_GetFrustumRadiusAndCenterDistance(tpoat* __restrict pFrustumCenterDistanceOut,tpoat cameraNearClippingPlane,tpoat cameraFarClippingPlane,tpoat cameraFovyDeg,tpoat cameraAspectRatio,tpoat cameraTargetDistanceForUnstableOrtho3DModeOnly_or_zero);
+// 'frustumCenterOut3' is in world space (mandatory arg).
+// 'cameraVMatrixInverse16' must be orthonormal (no scaling).
+void Teapot_Helper_GetFrustumCenterFromCenterDistance(tpoat* __restrict frustumCenterOut3,const tpoat* __restrict cameraVMatrixInverse16,tpoat frustumCenterDistance);
+// 'optionalPMatrixInverse16' is required only if you need to retrieve (one or more of) the arguments that follow them (otherwise their value is untouched).
+// 'normalizedLightDirection3' must be in world space.
+void Teapot_Helper_GetLightViewProjectionMatrixExtra(tpoat* __restrict lvpMatrixOut16
+                                                          ,const tpoat* __restrict cameraVMatrixInverse16,const tpoat* __restrict cameraFrustumCenterInWorldSpace3,tpoat cameraFrustumRadius
+                                                          ,const tpoat*  __restrict normalizedLightDirection3,unsigned short shadowMapWidth,unsigned short shadowMapHeight
                                                           ,const tpoat* __restrict optionalCameraPMatrixInverse16
                                                           ,tpoat* __restrict optionalLightViewportClippingOut4,tpoat optionalCameraFrustumPointsInNDCLightSpaceOut[8][4]
-                                                          ,tpoat* __restrict optionalLVPMatrixForFrustumCullingUsageOut16
+                                                          ,tpoat* __restrict optionalLVPMatrixForFrustumCullingUsageOut16   // Highly experimental and untested
                                                           );
-// This function can be used to auto-calculate the light vpMatrix (for a directional light),that fits a camera frustum
-static __inline void  Teapot_Helper_GetLightViewProjectionMatrix(tpoat* __restrict lvpMatrixOut16,
-                                                          const tpoat* __restrict cameraVMatrixInverse16,
-                                                          tpoat cameraNearClippingPlane,tpoat cameraFarClippingPlane,tpoat cameraFovyDeg,tpoat cameraAspectRatio,
-                                                          const tpoat*  __restrict normalizedLightDirection3, tpoat texelIncrement)  {
-     Teapot_Helper_GetLightViewProjectionMatrixExtra(lvpMatrixOut16,cameraVMatrixInverse16,cameraNearClippingPlane,cameraFarClippingPlane,cameraFovyDeg,cameraAspectRatio,normalizedLightDirection3,texelIncrement,0,0,0,0,0,0);
-}
+// 'normalizedLightDirection3' must be in world space.
+void Teapot_Helper_GetLightViewProjectionMatrix(tpoat* __restrict lvpMatrixOut16
+                                                         ,const tpoat* __restrict cameraVMatrixInverse16,const tpoat* __restrict cameraFrustumCenterInWorldSpace3,tpoat cameraFrustumRadius
+                                                        ,const tpoat*  __restrict normalizedLightDirection3,unsigned short shadowMapWidth,unsigned short shadowMapHeight);
+
 static __inline void Teapot_Helper_MatrixMulDir(const tpoat* __restrict m16,tpoat* __restrict dirOut3,const tpoat dirX,tpoat dirY,tpoat dirZ) {
     //tpoat w;
     dirOut3[0] = dirX*m16[0] + dirY*m16[4] + dirZ*m16[8];
@@ -423,6 +476,11 @@ static __inline void Teapot_Helper_MatrixMulDir(const tpoat* __restrict m16,tpoa
     //if (w!=0 && w!=1) {dirOut3[0]/=w;dirOut3[1]/=w;dirOut3[2]/=w;}
 }
 static __inline void Teapot_Helper_MatrixMulPos(const tpoat* __restrict m16,tpoat* __restrict posOut3,const tpoat posX,tpoat posY,tpoat posZ) {
+    posOut3[0] = posX*m16[0] + posY*m16[4] + posZ*m16[8] + m16[12];
+    posOut3[1] = posX*m16[1] + posY*m16[5] + posZ*m16[9] + m16[13];
+    posOut3[2] = posX*m16[2] + posY*m16[6] + posZ*m16[10]+ m16[14];
+}
+static __inline void Teapot_Helper_MatrixMulPosWithWDivision(const tpoat* __restrict m16,tpoat* __restrict posOut3,const tpoat posX,tpoat posY,tpoat posZ) {
     tpoat w;
     posOut3[0] = posX*m16[0] + posY*m16[4] + posZ*m16[8] + m16[12];
     posOut3[1] = posX*m16[1] + posY*m16[5] + posZ*m16[9] + m16[13];
@@ -459,15 +517,18 @@ static __inline tpoat Teapot_Helper_Round(tpoat number)	{return number < 0.0 ? c
 
 
 // It "should" performs AABB test. mfMatrix16 is the matrix M so that: F*M = mvpMatrix (F being the matrix used to extract the frustum planes). Here we use: F=pMatrix and M=mvMatrix, but it could be: F=vpMatrix and M=mMatrix too.
-int Teapot_Helper_IsVisible(const tpoat frustumPlanes[6][4],const tpoat*__restrict mfMatrix16,tpoat aabbMinX,tpoat aabbMinY,tpoat aabbMinZ,tpoat aabbMaxX,tpoat aabbMaxY,tpoat aabbMaxZ);
+int Teapot_Helper_IsVisible(const tpoat frustumPlanes[6][4],const tpoat*__restrict mfMatrix16,const tpoat* __restrict aabbCenter3,const tpoat* __restrict aabbHalfExtents3);
 int Teapot_Helper_UnProject_MvpMatrixInv(tpoat winX,tpoat winY,tpoat winZ,const tpoat* __restrict mvpMatrixInv16,const int* viewport4,tpoat* objX,tpoat* objY,tpoat* objZ);
 // Maps the specified window coordinates into object coordinates using mvMatrix16, pMatrix16, and viewport4.
 // The result is stored in objX, objY, and objZ. A return value of 1 indicates success; a return value of 0 indicates failure.
 // viewport4 Specifies the current viewport (as from a glGetIntegerv call).
-static __inline int Teapot_Helper_UnProject(tpoat winX,tpoat winY,tpoat winZ,const tpoat* __restrict mvMatrix16,const tpoat* __restrict pMatrix16,const int* viewport4,tpoat* objX,tpoat* objY,tpoat* objZ) {
-    tpoat mvpMatrixInv[16];Teapot_Helper_MultMatrix(mvpMatrixInv,pMatrix16,mvMatrix16);Teapot_Helper_InvertMatrix(mvpMatrixInv,mvpMatrixInv);
-    return Teapot_Helper_UnProject_MvpMatrixInv(winX,winY,winZ,mvpMatrixInv,viewport4,objX,objY,objZ);
-}
+int Teapot_Helper_UnProject(tpoat winX,tpoat winY,tpoat winZ,const tpoat* __restrict mvMatrix16,const tpoat* __restrict pMatrix16,const int* viewport4,tpoat* objX,tpoat* objY,tpoat* objZ);
+void Teapot_Helper_UnProjectMouseCoords(tpoat* rayOriginOut3,tpoat* rayDirOut3,int mouseX,int mouseY,const tpoat* vpMatrixInv,const int* viewport4);
+int Teapot_Helper_GetMeshUnderMouseFromRayGeneric(int numMeshes,void (*getMeshDataCallback)(int idx,tpoat* __restrict mMatrix16InOut,tpoat aabbMinOut[3],tpoat aabbMaxOut[3],void* userData),const tpoat* rayOrigin3,const tpoat* rayDir3,tpoat* pOptionalDistanceOut,void* userData);
+
+// This should be equivalent to old: glLoadIdentity();gluPickMatrix(x,y,width,height,viewport); [plus glGet(...matrixmode...)]
+tpoat* Teapot_Helper_GetPickMatrix(tpoat* __restrict mOut16,tpoat x,tpoat y,tpoat width,tpoat height,const int* viewport4);
+
 
 static __inline void Teapot_Helper_ConvertMatrixd2f16(float* __restrict result16,const double* __restrict m16) {int i;for(i = 0; i < 16; i++) result16[i]=(float)m16[i];}
 static __inline void Teapot_Helper_ConvertMatrixf2d16(double* __restrict result16,const float* __restrict m16) {int i;for(i = 0; i < 16; i++) result16[i]=(double)m16[i];}
@@ -475,15 +536,22 @@ static __inline void Teapot_Helper_ConvertMatrixd2f9(float* __restrict result9,c
 static __inline void Teapot_Helper_ConvertMatrixf2d9(double* __restrict result9,const float* __restrict m9) {int i;for(i = 0; i < 9; i++) result9[i]=(double)m9[i];}
 
 
+// These draw an armature bone with the 'tail' placed in the matrix origin and 'length' directed in the 'y' relative axis (not affected by the TEAPOT_CENTER_MESHES_ON_FLOOR definition):
+void Teapot_Helper_DrawArmatureBone(const tpoat mMatrix[16],tpoat length);        // (optionally repeat this call for multiple draws)
+void Teapot_Helper_DrawArmatureBone_Mv(const tpoat mvMatrix[16],tpoat length);    // (optionally repeat this call for multiple draws) Note that this is not the model matrix, but: Teapot_Helper_MultMatrix(mvMatrix,vMatrix,mMatrix)
+
+
 // Low-level API (use it at your own risk, or never use it at all!)
 
 // These can be used to replace Teapot_PreDraw()
 void Teapot_LowLevel_EnableVertexAttributes(int enableVertexAttribArray,int enableNormalAttribArray); // args are bool variables (0 or 1)
 void Teapot_LowLevel_BindVertexBufferObject(void);
+void Teapot_LowLevel_BindVertexBufferObjectAndEnableVertexAttributes(int enableVertexAttribArray,int enableNormalAttribArray); // args are bool variables (0 or 1)
 void Teapot_LowLevel_BindShaderProgram(void);
 
 void Teapot_LowLevel_StartDisablingLighting(void);      // Use Teapot_SetAmbientColor() to set the color then (but ALPHA is still set through last call to Teapot_SetColor(...))
 void Teapot_LowLevel_SetMvMatrixUniform(const tpoat mvMatrix[16]);   // This just sets the uniform matrix
+void Teapot_LowLevel_SetMvMatrixUniformFloat(const float mvMatrix[16]); // Same as above, but enforces single precision
 void Teapot_LowLevel_DrawElements(TeapotMeshEnum meshId);   // This just calls glDrawElements(...)
 void Teapot_LowLevel_StopDisablingLighting(void);
 
@@ -491,16 +559,22 @@ void Teapot_LowLevel_StopDisablingLighting(void);
 void Teapot_LowLevel_UnbindShaderProgram(void);
 void Teapot_LowLevel_UnbindVertexBufferObject(void);
 void Teapot_LowLevel_DisableVertexAttributes(int disableVertexAttribArray,int disableNormalAttribArray); // args are bool variables (0 or 1)
+void Teapot_LowLevel_UnbindVertexBufferObjectAndDisableVertexAttributes(int disableVertexAttribArray,int disableNormalAttribArray); // args are bool variables (0 or 1)
+
+// These are just the two internal functions that compose Teapot_Helper_IsVisible(...), for advanced users only
+void Teapot_Helper_LowLevel_OBB2AABB(tpoat* __restrict aabbMinMax6Out,const tpoat*__restrict mfMatrix16,const tpoat* __restrict aabbCenter3, const tpoat* __restrict aabbHalfExtents3);
+int Teapot_Helper_LowLevel_IsAABBVisible(const tpoat frustumPlanes[6][4],const tpoat* __restrict aabbMinMax6);
+
 
 #if (defined(DYNAMIC_RESOLUTION_H) && defined(TEAPOT_SHADER_USE_SHADOW_MAP))
 #if ((defined(DYNAMIC_RESOLUTION_USE_DOUBLE_PRECISION) && defined(TEAPOT_USE_DOUBLE_PRECISION)) || (!defined(DYNAMIC_RESOLUTION_USE_DOUBLE_PRECISION) && !defined(TEAPOT_USE_DOUBLE_PRECISION)))
 // lpvMatrix16 = lpMatrix16 * lvMatrix16 (light projection and view matrices)
-void Teapot_HiLevel_DrawMulti_ShadowMap_Vp(Teapot_MeshData* const* pMeshData,int numMeshData,const tpoat* lvpMatrix16, float transparent_threshold);
+void Teapot_HiLevel_DrawMulti_ShadowMap_Vp(Teapot_MeshData* const* pMeshData,int numMeshData,const tpoat* lvpMatrix16, float transparent_threshold, void (*optionalAdditionalObjectsCallback)(void* userData)/*=NULL*/,void* userData/*=NULL*/);
 // Not always faster (overhead + no BVH). Anyway use: Teapot_Helper_GetFrustumPlaneEquations(vpMatrixFrustumPlaneEquations,lvpMatrix16,0);
-void Teapot_HiLevel_DrawMulti_ShadowMap_Vp_WithFrustumCulling(Teapot_MeshData* const* pMeshData,int numMeshData,const tpoat* lvpMatrix16, const tpoat lvpMatrixFrustumPlaneEquations[6][4], float transparent_threshold);
-static __inline void Teapot_HiLevel_DrawMulti_ShadowMap(Teapot_MeshData* const* pMeshData,int numMeshData,const tpoat* lpMatrix16, const tpoat* lvMatrix16, float transparent_threshold) {
+void Teapot_HiLevel_DrawMulti_ShadowMap_Vp_WithFrustumCulling(Teapot_MeshData* const* pMeshData,int numMeshData,const tpoat* lvpMatrix16, const tpoat lvpMatrixFrustumPlaneEquations[6][4], float transparent_threshold, void (*optionalAdditionalObjectsCallback)(void* userData)/*=NULL*/,void* userData/*=NULL*/);
+static __inline void Teapot_HiLevel_DrawMulti_ShadowMap(Teapot_MeshData* const* pMeshData,int numMeshData,const tpoat* lpMatrix16, const tpoat* lvMatrix16, float transparent_threshold, void (*optionalAdditionalObjectsCallback)(void* userData)/*=NULL*/,void* userData/*=NULL*/) {
     tpoat lpvMatrix16[16];Teapot_Helper_MultMatrix(lpvMatrix16,lpMatrix16,lvMatrix16);
-    Teapot_HiLevel_DrawMulti_ShadowMap_Vp(pMeshData,numMeshData,lpvMatrix16,transparent_threshold);
+    Teapot_HiLevel_DrawMulti_ShadowMap_Vp(pMeshData,numMeshData,lpvMatrix16,transparent_threshold,optionalAdditionalObjectsCallback,userData);
 }
 #endif
 #endif
@@ -519,8 +593,22 @@ static __inline void Teapot_HiLevel_DrawMulti_ShadowMap(Teapot_MeshData* const* 
 #ifndef TEAPOT_IMPLEMENTATION_H
 #define TEAPOT_IMPLEMENTATION_H // Additional guard
 
-#include <math.h>   // sqrt
+#ifndef COMPILER_SUPPORTS_GCC_DIAGNOSTIC    // We define this
+#   if (defined(__GNUC__) || defined(__MINGW__) || defined(__clang__))
+#       define COMPILER_SUPPORTS_GCC_DIAGNOSTIC
+#   endif
+#endif
+
+#ifdef COMPILER_SUPPORTS_GCC_DIAGNOSTIC
+#   pragma GCC diagnostic push
+#   pragma GCC diagnostic ignored "-Wpragmas"
+#   pragma GCC diagnostic ignored "-Wunknown-warning-option"
+#   pragma GCC diagnostic ignored "-Wrestrict"
+#endif //COMPILER_SUPPORTS_GCC_DIAGNOSTIC
+
+#include <math.h>   // sqrt fabs(f)
 #include <stdlib.h> // qsort
+#include <string.h> // memcpy
 #ifdef TEAPOT_USE_OPENMP
 #include <omp.h>
 #endif //TEAPOT_USE_OPENMP
@@ -540,6 +628,11 @@ static __inline void Teapot_HiLevel_DrawMulti_ShadowMap(Teapot_MeshData* const* 
 #   define XSTR_MACRO(s) STR_MACRO(s)
 #endif //XSTR_MACRO
 
+#ifdef TEAPOT_USE_DOUBLE_PRECISION
+#   define TEAPOT_FABS(N) fabs(N)
+#else
+#   define TEAPOT_FABS(N) fabsf(N)
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -588,16 +681,21 @@ static const char* TeapotVS[] = {
     "attribute vec3 a_normal;\n"
     "uniform mat4 u_mvMatrix;\n"
     "uniform mat4 u_pMatrix;\n"
-#   ifdef TEAPOT_SHADER_USE_NORMAL_MATRIX
-    "uniform mat3 u_nMatrix;\n"
-#   endif //TEAPOT_SHADER_USE_NORMAL_MATRIX
+#   ifdef TEAPOT_SHADER_USE_ACCURATE_NORMALS
+#       ifndef TEAPOT_SHADER_HINT_ACCURATE_NORMALS_GPU
+    "   uniform vec3 u_nCoefficients;\n"
+#       endif
+#   endif //TEAPOT_SHADER_USE_ACCURATE_NORMALS
     "uniform vec4 u_scaling;\n"
     "uniform vec3 u_lightVector;\n"
-    "uniform vec4 u_color;\n"
-    "uniform vec4 u_colorAmbient;\n"
-#   ifdef TEAPOT_SHADER_SPECULAR
-    "uniform vec4 u_colorSpecular;\n"   // R,G,B,SHININESS
+#   ifndef TEAPOT_SHADER_SPECULAR
+    "uniform vec4 u_colorData[2];\n"   // RGBA diffuse + RGBA ambient
+#   else //TEAPOT_SHADER_SPECULAR
+    "uniform vec4 u_colorData[3];\n"    // RGBA diffuse + RGBA ambient + RGBS specular (s=SHININESS)
+    "#define u_colorSpecular u_colorData[2]\n"
 #   endif //TEAPOT_SHADER_SPECULAR
+    "#define u_color u_colorData[0]\n"
+    "#define u_colorAmbient u_colorData[1]\n"
 #   ifdef TEAPOT_SHADER_FOG
     "uniform vec4 u_fogDistances;\n"
 #   ifndef TEAPOT_SHADER_FOG_HINT_FRAGMENT_SHADER
@@ -613,18 +711,27 @@ static const char* TeapotVS[] = {
     "varying vec4 v_color;\n"
     "\n"
     "void main()	{\n"
-#   ifndef TEAPOT_SHADER_USE_NORMAL_MATRIX
+#   ifndef TEAPOT_SHADER_USE_ACCURATE_NORMALS
+#       ifndef TEAPOT_SHADER_NORMALIZE_NORMALS
     "   vec3 normalEyeSpace = vec3(u_mvMatrix * vec4(a_normal, 0.0));\n"
-#   else //TEAPOT_SHADER_USE_NORMAL_MATRIX
-    //"   vec3 normalEyeSpace = u_nMatrix * a_normal;\n"
-    "   vec3 normalEyeSpace = normalize(u_nMatrix * a_normal);\n"
-#   endif //TEAPOT_SHADER_USE_NORMAL_MATRIX
+#       else
+    "   vec3 normalEyeSpace = normalize(vec3(u_mvMatrix * vec4(a_normal, 0.0)));\n"
+#       endif
+#   else //TEAPOT_SHADER_USE_ACCURATE_NORMALS
+    // https://lxjk.github.io/2017/10/01/Stop-Using-Normal-Matrix.html
+#       ifdef TEAPOT_SHADER_HINT_ACCURATE_NORMALS_GPU
+    "   vec3 u_nCoefficients=vec3(1.0/(dot(u_mvMatrix[0].xyz,u_mvMatrix[0].xyz)*u_scaling[0]),1.0/(dot(u_mvMatrix[1].xyz,u_mvMatrix[1].xyz)*u_scaling[1]),1.0/(dot(u_mvMatrix[2].xyz,u_mvMatrix[2].xyz)*u_scaling[2]));\n"
+#       endif
+    "   //vec3 normalEyeSpace = normalize(mat3(u_mvMatrix)*(a_normal*u_nCoefficients));\n"
+    "   vec3 normalEyeSpace = normalize(vec3(u_mvMatrix * vec4(a_normal*u_nCoefficients, 0.0)));\n"
+#   endif //TEAPOT_SHADER_USE_ACCURATE_NORMALS
     "   float fDot = max(0.0, dot(normalEyeSpace,u_lightVector));\n"
     "   vec4 vertexScaledWorldSpace = a_vertex * u_scaling;\n"
     "   vec4 vertexScaledEyeSpace = u_mvMatrix*vertexScaledWorldSpace;\n"
     "   //vertexScaledEyeSpace.xyz/vertexScaledEyeSpace.w;\n"                 // is this necessary ?
 #   ifdef TEAPOT_SHADER_USE_SHADOW_MAP
     "   v_shadowCoord = u_biasedShadowMvpMatrix*vertexScaledWorldSpace;\n"
+    //"   v_shadowCoord = u_biasedShadowMvpMatrix*(u_mvMatrix*vertexScaledWorldSpace);\n"
 #   endif //TEAPOT_SHADER_USE_SHADOW_MAP
 #   ifndef TEAPOT_SHADER_SPECULAR
     "   v_color = vec4(u_colorAmbient.rgb + u_color.rgb*(fDot*u_colorAmbient.a),u_color.a);\n"
@@ -641,7 +748,8 @@ static const char* TeapotVS[] = {
 #   else //TEAPOT_SHADER_FOG_HINT_FRAGMENT_SHADER
     "   float v_fog = \n"
 #   endif //TEAPOT_SHADER_FOG_HINT_FRAGMENT_SHADER
-    "   1.0 - (u_fogDistances.y-abs(vertexScaledEyeSpace.z))*u_fogDistances.w;\n"
+    //"   1.0 - (u_fogDistances.y-abs(vertexScaledEyeSpace.z))*u_fogDistances.w;\n"
+    "   1.0 - min((u_fogDistances.y+vertexScaledEyeSpace.z)*u_fogDistances.w,1.0);\n"
 #   ifndef TEAPOT_SHADER_FOG_HINT_FRAGMENT_SHADER
     "  v_color.rgb = mix(v_color.rgb,u_fogColor.rgb,v_fog);\n"
 #   endif //TEAPOT_SHADER_FOG_HINT_FRAGMENT_SHADER
@@ -735,6 +843,10 @@ static const char* TeapotFS[] = {
 
 
 typedef struct {
+    float color[4];
+    float colorAmbient[4];
+    float colorSpecular[4];
+
     GLuint programId;
     GLuint vertexBuffer,elementBuffer;
     int startInds[TEAPOT_MESH_COUNT];
@@ -744,9 +856,10 @@ typedef struct {
     float aabbMin[TEAPOT_MESH_COUNT][3];
     float aabbMax[TEAPOT_MESH_COUNT][3];
     GLint aLoc_vertex,aLoc_normal;
-    GLint uLoc_mvMatrix,uLoc_pMatrix,uLoc_nMatrix,uLoc_scaling,
-    uLoc_lightVector,uLoc_color,uLoc_colorAmbient,uLoc_colorSpecular,
-    uLoc_fogColor,uLoc_fogDistances,
+    GLint uLoc_mvMatrix,uLoc_pMatrix,uLoc_nCoefficients,uLoc_scaling,
+    uLoc_lightVector;
+    GLint uLoc_color,uLoc_colorAmbient,uLoc_colorSpecular;
+    GLint uLoc_fogColor,uLoc_fogDistances,
     uLoc_biasedShadowMvpMatrix,uLoc_shadowMap,uLoc_shadowDarkening,uLoc_shadowMapFactor,uLoc_shadowMapTexelIncrement;
 
     tpoat lightDirectionWorldSpace[3];
@@ -755,10 +868,6 @@ typedef struct {
     tpoat pMatrixFrustum[6][4];
     tpoat vMatrix[16];
     float scaling[3];
-
-    float color[4];
-    float colorAmbient[4];
-    float colorSpecular[4];
 
     tpoat vMatrixInverse[16];
     tpoat biasedShadowVpMatrix[16]; // actually what we store here is: biasedShadowVpMatrix * vMatrixInverse (so that we must multiply it per mvMatrix, instead of mMatrix)
@@ -776,6 +885,7 @@ static TeapotInitCallback gTeapotInitCallback=NULL;
 static TeapotInitUserMeshCallback gTeapotInitUserMeshCallback=NULL;
 
 static __inline GLuint Teapot_LoadShaderProgramFromSource(const char* vs,const char* fs);
+static __inline GLuint Teapot_LoadShaderProgramFromSourceExt(const char* sh0,GLenum sh0_type,const char* sh1,GLenum sh1_type,const char* sh2,GLenum sh2_type,const char* sh3,GLenum sh3_type,const char* sh4,GLenum sh4_type);
 void Teapot_Helper_LookAt(tpoat* __restrict mOut16,tpoat eyeX,tpoat eyeY,tpoat eyeZ,tpoat centerX,tpoat centerY,tpoat centerZ,tpoat upX,tpoat upY,tpoat upZ)    {
     tpoat* m = mOut16;
     const tpoat eps = 0.0001;
@@ -884,13 +994,28 @@ void Teapot_Helper_Ortho(tpoat* __restrict mOut16,tpoat left,tpoat right, tpoat 
     res[14] = (farVal+nearVal)/Dfn;
     res[15] = 1;
 }
+void Teapot_Helper_Ortho3D(tpoat* __restrict mOut16,tpoat cameraTargetDistance,tpoat degfovy,tpoat aspect,tpoat znear,tpoat zfar)   {
+    // Warning: this function might be WRONG! Use it at your own risk!
+    const tpoat FOVTG=tan(degfovy*(tpoat)(3.14159265358979323846/360.0));
+    tpoat y=cameraTargetDistance*FOVTG;//=(zfar-znear)*0.5f;
+    //tpoat y=(cameraTargetDistance<zfar?cameraTargetDistance:zfar)*FOVTG;  // or maybe this?
+    tpoat x=y*aspect;
+    //Teapot_Helper_Ortho(mOut16, -x, x, -y, y, znear, zfar);  // I thought this was correct
+    //Teapot_Helper_Ortho(mOut16, -x, x, -y, y, -zfar, znear);  // But this works better in my test-case
+    Teapot_Helper_Ortho(mOut16, -x, x, -y, y, -zfar, -znear);  // Or maybe this?
+}
 tpoat* Teapot_Helper_TranslateMatrix(tpoat* __restrict mInOut16,tpoat x,tpoat y,tpoat z)  {
+#ifdef TEAPOT_USE_LEGACY_CODE
     const tpoat m[16] = {
         1, 0, 0, 0,
         0, 1, 0, 0,
         0, 0, 1, 0,
         x, y, z, 1};
     return Teapot_Helper_MultMatrix(mInOut16,mInOut16,m);
+#else
+    int i;for (i=0;i<3;i++) mInOut16[12+i]+=mInOut16[i]*x+mInOut16[4+i]*y+mInOut16[8+i]*z;
+    return mInOut16;
+#endif
 }
 tpoat* Teapot_Helper_RotateMatrix(tpoat* __restrict mInOut16,tpoat degAngle,tpoat x,tpoat y,tpoat z)  {
     const tpoat angle = degAngle*M_PIOVER180;
@@ -898,18 +1023,50 @@ tpoat* Teapot_Helper_RotateMatrix(tpoat* __restrict mInOut16,tpoat degAngle,tpoa
     const tpoat s = sin(angle);
     tpoat len = x*x+y*y+z*z;
     if (len<0.999f || len>1.001f) {len=sqrt(len);x/=len;y/=len;z/=len;}
+#ifdef TEAPOT_USE_LEGACY_CODE
     {
-        const tpoat m[16] = {
+        /*const tpoat m[16] = {
             c + x*x*(1-c),  y*x*(1-c)+z*s,    z*x*(1-c)-y*s,    0,
             x*y*(1-c) - z*s,  c + y*y*(1-c),      z*y*(1-c) + x*s,    0,
             x*z*(1-c) + y*s,  y*z*(1-c) - x*s,    c + z*z*(1-c),      0,
-            0,              0,                  0,                  1};
+            0,              0,                  0,                  1};*/
+        const tpoat zero = 0,one = 1,omc = 1-c, xs = x*s,ys = y*s,zs = z*s;
+        const tpoat xy = x*y,xz = x*z,yz = y*z, xx = x*x,yy = y*y,zz = z*z;
+        const tpoat m[16] = {
+            c+xx*omc,   xy*omc+zs,  xz*omc-ys,  zero,
+            xy*omc-zs,  c+yy*omc,   yz*omc+xs,  zero,
+            xz*omc+ys,  yz*omc-xs,  c+zz*omc,   zero,
+            zero,       zero,       zero,       one};
         return Teapot_Helper_MultMatrix(mInOut16,mInOut16,m);
     }
+#else
+    {
+        const tpoat omc = (tpoat)1-c, xs = x*s,ys = y*s,zs = z*s;int i;
+        const tpoat xy = x*y,xz = x*z,yz = y*z, xx = x*x,yy = y*y,zz = z*z;
+        const tpoat rot[9] = {  /* 3x3 rotation matrix */
+            c+xx*omc,   xy*omc+zs,  xz*omc-ys,
+            xy*omc-zs,  c+yy*omc,   yz*omc+xs,
+            xz*omc+ys,  yz*omc-xs,  c+zz*omc
+        };
+        const tpoat* m = mInOut16;
+        for (i=0;i<3;i++)   {   /* manual 3x3 rotation */
+            const tpoat mi=m[i],mi4=m[i+4],mi8=m[i+8];  /* we cannot use references here */
+            mInOut16[i]     = mi*rot[0] + mi4*rot[1] + mi8*rot[2];
+            mInOut16[4+i]   = mi*rot[3] + mi4*rot[4] + mi8*rot[5];
+            mInOut16[8+i]   = mi*rot[6] + mi4*rot[7] + mi8*rot[8];
+        }
+        return mInOut16;
+    }
+#endif
 }
 tpoat* Teapot_Helper_ScaleMatrix(tpoat* __restrict mInOut16,tpoat x,tpoat y,tpoat z)  {
+#ifdef TEAPOT_USE_LEGACY_CODE
     const tpoat m[16] = {x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1};
     return Teapot_Helper_MultMatrix(mInOut16,mInOut16,m);
+#else
+    int i;for (i=0;i<3;i++) {mInOut16[i]*=x;mInOut16[4+i]*=y;mInOut16[8+i]*=z;}
+    return mInOut16;   
+#endif
 }
 int Teapot_Helper_InvertMatrix(tpoat* __restrict mOut16,const tpoat* __restrict m16)	{
     const tpoat* m = m16;
@@ -980,14 +1137,58 @@ int Teapot_Helper_InvertMatrix(tpoat* __restrict mOut16,const tpoat* __restrict 
     }
     return 1;
 }
-void Teapot_Helper_InvertMatrixFast(tpoat* __restrict mOut16,const tpoat* __restrict m16)	{
+void Teapot_Helper_InvertTransformMatrix(tpoat* __restrict mOut16,const tpoat* __restrict m16)  {
+    // It works only for translation + rotation + scaling, and only
+    // when rotation can be represented by an unit quaternion
+    const tpoat* m = m16;
+    tpoat* n = mOut16;int i,i4,i4p1,i4p2;
+    const tpoat T[3] = {-m[12],-m[13],-m[14]};
+    // Step 1. Transpose the 3x3 submatrix
+    n[3]=m[3];n[7]=m[7];n[11]=m[11];n[15]=m[15];
+    n[0]=m[0];n[1]=m[4];n[2]=m[8];
+    n[4]=m[1];n[5]=m[5];n[6]=m[9];
+    n[8]=m[2];n[9]=m[6];n[10]=m[10];
+    // Step 2. Adjust scaling
+    for (i=0;i<3;i++)	{
+        tpoat rsi;
+        i4=4*i;i4p1=i4+1;i4p2=i4p1+1;
+        rsi = m[i4]*m[i4]+m[i4p1]*m[i4p1]+m[i4p2]*m[i4p2];
+        if (rsi>1.e-8f) rsi=(tpoat)1.0/rsi;
+        else rsi=(tpoat)1.0;
+        n[i]*=rsi;n[i+4]*=rsi;n[i+8]*=rsi;
+    }
+    // Step 3. Adjust translation
+    n[12]=T[0]*n[0] + T[1]*n[4] +T[2]*n[8];
+    n[13]=T[0]*n[1] + T[1]*n[5] +T[2]*n[9];
+    n[14]=T[0]*n[2] + T[1]*n[6] +T[2]*n[10];
+}
+tpoat* Teapot_Helper_ExtractMatrix3x3Inverse(tpoat* __restrict m9Out,const tpoat* __restrict m16)  {
+    // It works only for rotation + scaling, and only
+    // when rotation can be represented by an unit quaternion
+    const tpoat* m = m16;tpoat* n = m9Out;int i,i4,i4p1,i4p2;
+    // Step 1. Transpose the 3x3 submatrix
+    n[0]=m[0];n[1]=m[4];n[2]=m[8];
+    n[3]=m[1];n[4]=m[5];n[5]=m[9];
+    n[6]=m[2];n[7]=m[6];n[8]=m[10];
+    // Step 2. Adjust scaling
+    for (i=0;i<3;i++)	{
+        tpoat rsi;
+        i4=4*i;i4p1=i4+1;i4p2=i4p1+1;
+        rsi = m[i4]*m[i4]+m[i4p1]*m[i4p1]+m[i4p2]*m[i4p2];
+        if (rsi>1.e-8f) rsi=(tpoat)1.0/rsi;
+        else rsi=(tpoat)1.0;
+        n[i]*=rsi;n[i+3]*=rsi;n[i+6]*=rsi;
+    }
+    return m9Out;
+}
+void Teapot_Helper_InvertTransformMatrixFast(tpoat* __restrict mOut16,const tpoat* __restrict m16)	{
     // It works only for translation + rotation, and only
     // when rotation can be represented by an unit quaternion
     // scaling is discarded
     const tpoat* m = m16;
     tpoat* n = mOut16;
     const tpoat T[3] = {-m[12],-m[13],-m[14]};
-    tpoat w;
+    //tpoat w;
     // Step 1. Transpose the 3x3 submatrix
     n[3]=m[3];n[7]=m[7];n[11]=m[11];n[15]=m[15];
     n[0]=m[0];n[1]=m[4];n[2]=m[8];
@@ -997,8 +1198,40 @@ void Teapot_Helper_InvertMatrixFast(tpoat* __restrict mOut16,const tpoat* __rest
     n[12]=T[0]*n[0] + T[1]*n[4] +T[2]*n[8];
     n[13]=T[0]*n[1] + T[1]*n[5] +T[2]*n[9];
     n[14]=T[0]*n[2] + T[1]*n[6] +T[2]*n[10];
-    w    =T[0]*n[3] + T[1]*n[7] +T[2]*n[11];
-    if (w!=0 && w!=1) {n[12]/=w;n[13]/=w;n[14]/=w;} // These last 2 lines are not strictly necessary AFAIK
+    //w    =T[0]*n[3] + T[1]*n[7] +T[2]*n[11];
+    //if (w!=0 && w!=1) {n[12]/=w;n[13]/=w;n[14]/=w;} // These last 2 lines are not strictly necessary AFAIK
+}
+tpoat* Teapot_Helper_ExtractMatrix3x3InverseFast(tpoat* __restrict m9Out,const tpoat* __restrict m16)  {
+    // It works only for rotation without scaling, and only
+    // when rotation can be represented by an unit quaternion
+    const tpoat* m = m16;
+    tpoat* n = m9Out;
+    // Just transpose the 3x3 submatrix
+    /*
+        m[0] m[1] m[2]
+        m[4] m[5] m[6]
+        m[8] m[9] m[10]
+
+    */
+    n[0]=m[0];n[1]=m[4];n[2]=m[8];
+    n[3]=m[1];n[4]=m[5];n[5]=m[9];
+    n[6]=m[2];n[7]=m[6];n[8]=m[10];
+    return m9Out;
+}
+
+void Teapot_Helper_InvertTransformMatrixXZAxisInPlace(tpoat* __restrict m16)	{
+    tpoat* d = m16;
+    d[0]=-d[0]; d[8] =-d[8];
+    d[1]=-d[1]; d[9] =-d[9];
+    d[2]=-d[2]; d[10]=-d[10];
+}
+tpoat* Teapot_Helper_InvertTransformMatrixXZAxis(tpoat* __restrict mOut16,const tpoat* __restrict m16)	{
+    tpoat* d = mOut16;const tpoat* s = m16;
+    d[0]=-s[0]; d[4]=s[4]; d[8] = -s[8]; d[12]=s[12];
+    d[1]=-s[1]; d[5]=s[5]; d[9] = -s[9]; d[13]=s[13];
+    d[2]=-s[2]; d[6]=s[6]; d[10]=-s[10]; d[14]=s[14];
+    d[3]= s[3]; d[7]=s[7]; d[11]= s[11]; d[15]=s[15];
+    return mOut16;
 }
 void Teapot_Helper_GetFrustumPlaneEquations(tpoat planeEquationsOut[6][4],const tpoat* __restrict vpMatrix16,int normalizePlanes)   {
     // ax+by+cz+d=0 [xl,xr,yb,yt,zn,zf],normalizePlanes=0 -> no normalization
@@ -1008,22 +1241,23 @@ void Teapot_Helper_GetFrustumPlaneEquations(tpoat planeEquationsOut[6][4],const 
     tpoat m30 = vpMatrix16[3], m31 = vpMatrix16[7], m32 = vpMatrix16[11], m33 = vpMatrix16[15];
     tpoat* p = NULL;
     p = &planeEquationsOut[0][0];   // Left
-    p[0] = m30+m00; p[1] = m31+m01; p[2] = m32+m02; p[3] = m33+m03;if (normalizePlanes) Teapot_Helper_NormalizePlane(p);
+    p[0] = m30+m00; p[1] = m31+m01; p[2] = m32+m02; p[3] = m33+m03;
     p = &planeEquationsOut[1][0];   // Right
-    p[0] = m30-m00; p[1] = m31-m01; p[2] = m32-m02; p[3] = m33-m03;if (normalizePlanes) Teapot_Helper_NormalizePlane(p);
+    p[0] = m30-m00; p[1] = m31-m01; p[2] = m32-m02; p[3] = m33-m03;
     p = &planeEquationsOut[2][0];   // Bottom
-    p[0] = m30+m10; p[1] = m31+m11; p[2] = m32+m12; p[3] = m33+m13;if (normalizePlanes) Teapot_Helper_NormalizePlane(p);
+    p[0] = m30+m10; p[1] = m31+m11; p[2] = m32+m12; p[3] = m33+m13;
     p = &planeEquationsOut[3][0];   // Top
-    p[0] = m30-m10; p[1] = m31-m11; p[2] = m32-m12; p[3] = m33-m13;if (normalizePlanes) Teapot_Helper_NormalizePlane(p);
+    p[0] = m30-m10; p[1] = m31-m11; p[2] = m32-m12; p[3] = m33-m13;
     p = &planeEquationsOut[4][0];   // Near
-    p[0] = m30+m20; p[1] = m31+m21; p[2] = m32+m22; p[3] = m33+m23;if (normalizePlanes) Teapot_Helper_NormalizePlane(p);
+    p[0] = m30+m20; p[1] = m31+m21; p[2] = m32+m22; p[3] = m33+m23;
     p = &planeEquationsOut[5][0];   // Far
-    p[0] = m30-m20; p[1] = m31-m21; p[2] = m32-m22; p[3] = m33-m23;if (normalizePlanes) Teapot_Helper_NormalizePlane(p);
+    p[0] = m30-m20; p[1] = m31-m21; p[2] = m32-m22; p[3] = m33-m23;
+    if (normalizePlanes) {int i;for (i=0;i<6;i++) Teapot_Helper_NormalizePlane(&planeEquationsOut[i][0]);}
 }
 void Teapot_Helper_GetFrustumPoints(tpoat frustumPoints[8][4],const tpoat* __restrict vpMatrixInverse16)    {
     const tpoat v[8][4] = {{-1, -1, -1, 1},{-1,  1, -1, 1},{ 1,  1, -1, 1},{ 1, -1, -1, 1},{-1, -1, 1, 1},{-1,  1, 1, 1},{ 1,  1, 1, 1},{ 1, -1, 1, 1}};
     int i;for (i = 0; i < 8; i++) {
-        Teapot_Helper_MatrixMulPos(vpMatrixInverse16,frustumPoints[i],v[i][0],v[i][1],v[i][2]);
+        Teapot_Helper_MatrixMulPosWithWDivision(vpMatrixInverse16,frustumPoints[i],v[i][0],v[i][1],v[i][2]);
         frustumPoints[i][3]=1;
     }
 }
@@ -1042,55 +1276,122 @@ static __inline void Teapot_Helper_GetFrustumAabbCenterAndHalfExtents(tpoat* __r
         if (frustumHalfExtentsOut3) frustumHalfExtentsOut3[j] = (vmax[j]-vmin[j])*0.5;
     }
 }
-// 'optionalPMatrixInverse16' is required only if you need to retrieve (one or more of) the arguments that follow it (otherwise their value is untouched).
-void Teapot_Helper_GetLightViewProjectionMatrixExtra(tpoat* __restrict lvpMatrixOut16,
-                                                          const tpoat* __restrict cameraVMatrixInverse16,
-                                                          tpoat cameraNearClippingPlane,tpoat cameraFarClippingPlane,tpoat cameraFovyDeg,tpoat cameraAspectRatio,
-                                                          const tpoat*  __restrict normalizedLightDirection3, tpoat texelIncrement
-                                                          ,tpoat* __restrict optionalSphereCenterOut,tpoat* __restrict optionalSphereRadiiSquaredOut
-                                                          ,const tpoat* __restrict optionalCameraPMatrixInverse16
-                                                          ,tpoat* __restrict optionalLightViewportClippingOut4,tpoat optionalCameraFrustumPointsInNDCLightSpaceOut[8][4]
-                                                          ,tpoat* __restrict optionalLVPMatrixForFrustumCullingUsageOut16   // Highly experimental and untested
-                                                          )  {
-    const tpoat cameraPosition3[3] = {cameraVMatrixInverse16[12],cameraVMatrixInverse16[13],cameraVMatrixInverse16[14]};
-    const tpoat cameraForwardDirection3[3] = {-cameraVMatrixInverse16[8],-cameraVMatrixInverse16[9],-cameraVMatrixInverse16[10]};
-    tpoat frustumCenter[3] = {0,0,0};tpoat radius = 0;
-    tpoat lpMatrix[16],lvMatrix[16],lvpMatrixFallback[16];
-    int i;
+// returns the frustum radius (by value) and the scalar (positive) distance from the the camera eye to the frustum center (by 'pFrustumCenterDistanceOut').
+// 'cameraTargetDistanceForUnstableOrtho3DModeOnly_or_zero': the arg name is correct when the result is passed to 'Teapot_Helper_GetLightViewProjectionMatrix' functions.
+// Otherwise simply set it when using an ortho3D camera frustum (that needs a camera-target distance), or just set it to zero.
+tpoat Teapot_Helper_GetFrustumRadiusAndCenterDistance(tpoat* __restrict pFrustumCenterDistanceOut,tpoat cameraNearClippingPlane,tpoat cameraFarClippingPlane,tpoat cameraFovyDeg,tpoat cameraAspectRatio,tpoat cameraTargetDistanceForUnstableOrtho3DModeOnly_or_zero)    {
+    tpoat radius,frustumCenterDistance;
+    tpoat tanFovDiagonalSquared = tan(cameraFovyDeg*(tpoat)(3.14159265358979323846/360.0)); // At this point this is just TANFOVY
+    const tpoat halfNearFarClippingPlane = (tpoat)0.5*(cameraFarClippingPlane+cameraNearClippingPlane);
+
+    if (cameraTargetDistanceForUnstableOrtho3DModeOnly_or_zero>cameraFarClippingPlane) cameraTargetDistanceForUnstableOrtho3DModeOnly_or_zero = 0;  // Not needed
 
     // Get frustumCenter and radius
-    tpoat frustumCenterDistance;
-    tpoat tanFovDiagonalSquared = tan(cameraFovyDeg*3.14159265358979323846/360.0); // 0.5*M_PI/180.0
-    const tpoat halfNearFarClippingPlane = 0.5*(cameraFarClippingPlane+cameraNearClippingPlane);
-    if (lvpMatrixOut16==0) lvpMatrixOut16=lvpMatrixFallback;    // AFAIK from the caller point of view it's still lvpMatrixOut16==0, isn't it?
-    tanFovDiagonalSquared*=tanFovDiagonalSquared;
-    tanFovDiagonalSquared*=(1.0+cameraAspectRatio*cameraAspectRatio);
-    frustumCenterDistance = halfNearFarClippingPlane*(1.0+tanFovDiagonalSquared);
-    if (frustumCenterDistance > cameraFarClippingPlane) frustumCenterDistance = cameraFarClippingPlane;
-    for (i=0;i<3;i++) frustumCenter[i] = cameraPosition3[i]+cameraForwardDirection3[i]*frustumCenterDistance;
-    radius = (tanFovDiagonalSquared*cameraFarClippingPlane*cameraFarClippingPlane) + (cameraFarClippingPlane-frustumCenterDistance)*(cameraFarClippingPlane-frustumCenterDistance);
-    if (optionalSphereCenterOut)        *optionalSphereCenterOut = frustumCenterDistance;
-    if (optionalSphereRadiiSquaredOut)  *optionalSphereRadiiSquaredOut = radius;
+    if (cameraTargetDistanceForUnstableOrtho3DModeOnly_or_zero<=0)  {
+        // camera perspective mode here
+        tanFovDiagonalSquared*=tanFovDiagonalSquared;
+        tanFovDiagonalSquared*=((tpoat)1+cameraAspectRatio*cameraAspectRatio);
+        frustumCenterDistance = halfNearFarClippingPlane*((tpoat)1+tanFovDiagonalSquared);
+        if (frustumCenterDistance > cameraFarClippingPlane) frustumCenterDistance = cameraFarClippingPlane;
+        radius = (tanFovDiagonalSquared*cameraFarClippingPlane*cameraFarClippingPlane) + (cameraFarClippingPlane-frustumCenterDistance)*(cameraFarClippingPlane-frustumCenterDistance); // This is actually radiusSquared
+    }
+    else {
+        // camera ortho3d mode here
+        const tpoat y=cameraTargetDistanceForUnstableOrtho3DModeOnly_or_zero*tanFovDiagonalSquared;
+        const tpoat x=y*cameraAspectRatio;
+        const tpoat halfClippingPlaneDistance = (tpoat)(0.5)*(cameraFarClippingPlane-cameraNearClippingPlane);
+        frustumCenterDistance = halfNearFarClippingPlane;
+        radius = x*x+y*y; // This is actually radiusXYSquared
+        radius = radius + halfClippingPlaneDistance*halfClippingPlaneDistance;// This is actually radiusSquared
+    }
     radius = sqrt(radius);
     //fprintf(stderr,"radius=%1.4f frustumCenterDistance=%1.4f nearPlane=%1.4f farPlane = %1.4f\n",radius,frustumCenterDistance,cameraNearClippingPlane,cameraFarClippingPlane);
+    if (pFrustumCenterDistanceOut) *pFrustumCenterDistanceOut = frustumCenterDistance;
+    return radius;
 
     // For people trying to save texture space it's:  halfNearFarClippingPlane <= frustumCenterDistance <= cameraFarClippingPlane
     // When frustumCenterDistance == cameraFarClippingPlane, then frustumCenter is on the far clip plane (and half the texture space gets wasted).
     // when frustumCenterDistance == halfNearFarClippingPlane, then we're using an ortho projection matrix, and frustumCenter is in the middle of the near and far plane (no texture space gets wasted).
     // in all the other cases the space wasted can go from zero to half texture
+}
+// 'frustumCenterOut3' is in world space (mandatory arg).
+// 'cameraVMatrixInverse16' must be orthonormal (no scaling).
+void Teapot_Helper_GetFrustumCenterFromCenterDistance(tpoat* __restrict frustumCenterOut3,const tpoat* __restrict cameraVMatrixInverse16,tpoat frustumCenterDistance)    {
+    const tpoat cameraPosition3[3] = {cameraVMatrixInverse16[12],cameraVMatrixInverse16[13],cameraVMatrixInverse16[14]};
+    const tpoat cameraForwardDirection3[3] = {-cameraVMatrixInverse16[8],-cameraVMatrixInverse16[9],-cameraVMatrixInverse16[10]};
+    int i;if (frustumCenterOut3)  {for (i=0;i<3;i++) frustumCenterOut3[i] = cameraPosition3[i] + cameraForwardDirection3[i]*frustumCenterDistance;}
+}
+
+// 'optionalPMatrixInverse16' is required only if you need to retrieve (one or more of) the arguments that follow them (otherwise their value is untouched).
+// 'normalizedLightDirection3' must be in world space.
+void Teapot_Helper_GetLightViewProjectionMatrixExtra(tpoat* __restrict lvpMatrixOut16
+                                                          ,const tpoat* __restrict cameraVMatrixInverse16,const tpoat* __restrict cameraFrustumCenterInWorldSpace3,tpoat cameraFrustumRadius
+                                                          ,const tpoat*  __restrict normalizedLightDirection3,unsigned short shadowMapWidth,unsigned short shadowMapHeight
+                                                          ,const tpoat* __restrict optionalCameraPMatrixInverse16
+                                                          ,tpoat* __restrict optionalLightViewportClippingOut4,tpoat optionalCameraFrustumPointsInNDCLightSpaceOut[8][4]
+                                                          ,tpoat* __restrict optionalLVPMatrixForFrustumCullingUsageOut16   // Highly experimental and untested
+                                                          )  {
+    tpoat lpMatrix[16],lvMatrix[16],lvpMatrixFallback[16];
+    //const int user_wants_stable_shadow_mapping = optionalLVPMatrixForFrustumCullingUsageOut16 && !lvpMatrixOut16;
+    /* WARNING: 'texelIncrement' is used when user wants Stable Shadow Mapping: however the calculation in the line below
+       is correct only if:
+       a) shadowMapWidth == shadowMapHeight
+       OR, if we call shadowMapMin and shadowMapMax the min and max between shadowMapWidth and shadowMapHeight
+       b) shadowMapMax%shadowMapMin == 0 [this is always true if they are power of two AFAIK]
+       Otherwise shadow swimming is still present and Shadow Mapping is still Unstable (and unoptimized too for being Unstable)
+
+       P.S.1. The (b) case (when correctly implemented) has still some minor flickering, but it implements bidirectional shadow mapping
+              from: https://github.com/Flix01/Tiny-OpenGL-Shadow-Mapping-Examples/blob/master/shadow_mapping_bidimensional_texture.c
+       P.S.2. We don't check if (b) is correctly implemented here, because users can use this function to perform Unstable Stadow Mapping
+              too (passing 'lvpMatrixOut16'==NULL, 'optionalPMatrixInverse16'!=NULL and 'optionalLVPMatrixForFrustumCullingUsageOut16'!=NULL,
+              and using the latter as the returned 'lvpMatrixOut16').
+    */
+    const tpoat texelIncrement = shadowMapWidth>=shadowMapHeight ? (tpoat) 1.0/(tpoat)shadowMapHeight : (tpoat) 1.0/(tpoat)shadowMapWidth;
+    const tpoat cameraLeftDirection3[3] = {-cameraVMatrixInverse16[0],-cameraVMatrixInverse16[1],-cameraVMatrixInverse16[2]};
+    tpoat dotCameraXDirectionLightDirection = 0, lightUpVector3[3]={0,1,0};
+    int i;
+    if (lvpMatrixOut16==0) lvpMatrixOut16=lvpMatrixFallback;    // AFAIK from the caller point of view it's still lvpMatrixOut16==0, isn't it?
 
     // Shadow swimming happens when: 1) camera translates; 2) camera rotates; 3) objects move or rotate
     // AFAIK Shadow swimming (3) can't be fixed in any way
-    if (texelIncrement>0)   radius = ceil(radius/texelIncrement)*texelIncrement;      // This 'should' fix Shadow swimming (1)  [Not sure code is correct!]
+    if (texelIncrement>0)   cameraFrustumRadius = ceil(cameraFrustumRadius/texelIncrement)*texelIncrement;      // This 'should' fix Shadow swimming (1)  [Not sure code is correct!]
 
     // Get light matrices
-    Teapot_Helper_Ortho(lpMatrix,-radius,radius,-radius,radius,0,-2.0*radius);
+    Teapot_Helper_Ortho(lpMatrix,-cameraFrustumRadius,cameraFrustumRadius,-cameraFrustumRadius,cameraFrustumRadius,0,-(tpoat)2*cameraFrustumRadius);
+    if (shadowMapWidth!=shadowMapHeight)    {
+        if (lvpMatrixOut16!=lvpMatrixFallback)  {
+            // User wants stable shadow mapping... (with popping artifacts)
+            // Good (stable with popping artifacts)
+            dotCameraXDirectionLightDirection = TEAPOT_FABS(Teapot_Helper_Vector3Dot(cameraLeftDirection3,normalizedLightDirection3));
+            if (dotCameraXDirectionLightDirection>(tpoat)0.5) {lightUpVector3[0]=0;lightUpVector3[1]=0;lightUpVector3[2]=1;}
+        }
+        else {
+            // User wants unstable shadow mapping
+
+            /* // Good (unstable without popping)
+            dotCameraXDirectionLightDirection = Teapot_Helper_Vector3Dot(cameraLeftDirection3,normalizedLightDirection3);
+            lightUpVector3[0]=0;
+            lightUpVector3[2]=dotCameraXDirectionLightDirection;
+            lightUpVector3[1]=sqrt(1.0-dotCameraXDirectionLightDirection*dotCameraXDirectionLightDirection);
+            */
+            // Smoother (unstable without popping)
+            Teapot_Helper_Vector3Cross(lightUpVector3,cameraLeftDirection3,normalizedLightDirection3);
+            /* // Unfinished attempt.
+        {
+            tpoat tmp[3],tmp2[3];
+            // Let's find 'tmp2', the projection of 'normalizedLightDirection3' on the camera plane XY:
+            Teapot_Helper_Vector3Cross(tmp,normalizedLightDirection3,cameraForwardDirection3);
+            Teapot_Helper_Vector3Cross(tmp2,cameraForwardDirection3,tmp);
+        }
+        */
+        }
+    }
     Teapot_Helper_LookAt(lvMatrix,
-            frustumCenter[0]-normalizedLightDirection3[0]*radius,   // eye[0]
-            frustumCenter[1]-normalizedLightDirection3[1]*radius,   // eye[1]
-            frustumCenter[2]-normalizedLightDirection3[2]*radius,   // eye[2]
-            frustumCenter[0],frustumCenter[1],frustumCenter[2],     // target
-            0,1,0                                                   // up (people that cares about wasted texture space can probably change it)
+            cameraFrustumCenterInWorldSpace3[0]-normalizedLightDirection3[0]*cameraFrustumRadius,   // eye[0]
+            cameraFrustumCenterInWorldSpace3[1]-normalizedLightDirection3[1]*cameraFrustumRadius,   // eye[1]
+            cameraFrustumCenterInWorldSpace3[2]-normalizedLightDirection3[2]*cameraFrustumRadius,   // eye[2]
+            cameraFrustumCenterInWorldSpace3[0],cameraFrustumCenterInWorldSpace3[1],cameraFrustumCenterInWorldSpace3[2],     // target
+            lightUpVector3[0],lightUpVector3[1],lightUpVector3[2]                                                   // up (people that cares about wasted texture space can probably change it)
             );
     // Get output
     Teapot_Helper_MultMatrix(lvpMatrixOut16,lpMatrix,lvMatrix);
@@ -1100,7 +1401,7 @@ void Teapot_Helper_GetLightViewProjectionMatrixExtra(tpoat* __restrict lvpMatrix
         tpoat shadowOrigin[4]   = {0,0,0,1};
         tpoat roundedOrigin[4]  = {0,0,0,0};
         tpoat roundOffset[4]    = {0,0,0,0};
-        tpoat texelCoefficient = texelIncrement*2.0;
+        tpoat texelCoefficient = texelIncrement*(tpoat)2;
         Teapot_Helper_MatrixMulPos(lvpMatrixOut16,shadowOrigin,shadowOrigin[0],shadowOrigin[1],shadowOrigin[2]);
         for (i = 0; i < 2; i++) {// Or i<3 ?
             shadowOrigin[i]/= texelCoefficient;
@@ -1120,7 +1421,7 @@ void Teapot_Helper_GetLightViewProjectionMatrixExtra(tpoat* __restrict lvpMatrix
         int j;
         tpoat cameraVPMatrixInv[16],cameraVPMatrixInverseAdjusted[16];tpoat frustumPoints[8][4];
         tpoat minVal[3],maxVal[3],tmp;
-        Teapot_Helper_MultMatrix(cameraVPMatrixInv,cameraVMatrixInverse16,optionalCameraPMatrixInverse16); // vMatrixInverse16 needs an expensive Helper_InvertMatrix(...) to be calculated. Here we can exploit the property of the product of 2 invertse matrices.
+        Teapot_Helper_MultMatrix(cameraVPMatrixInv,cameraVMatrixInverse16,optionalCameraPMatrixInverse16); // vMatrixInverse16 needs an expensive Teapot_Helper_InvertMatrix(...) to be calculated. Here we can exploit the property of the product of 2 inverse matrices.
         // If we call Teapot_Helper_GetFrustumPoints(frustumPoints,cameraVPMatrixInv) we find the frustum corners in world space
 
         Teapot_Helper_MultMatrix(cameraVPMatrixInverseAdjusted,lvpMatrixOut16,cameraVPMatrixInv);  // This way we 'should' get all points in the [-1,1] light NDC space (or not?)
@@ -1147,10 +1448,11 @@ void Teapot_Helper_GetLightViewProjectionMatrixExtra(tpoat* __restrict lvpMatrix
         }
 
         if (optionalLightViewportClippingOut4)   {
-            optionalLightViewportClippingOut4[0] = minVal[0]*0.5+0.5;   // In [0,1] from [-1,1]
-            optionalLightViewportClippingOut4[1] = minVal[1]*0.5+0.5;   // In [0,1] from [-1,1]
-            optionalLightViewportClippingOut4[2] = (maxVal[0]-minVal[0])*0.5;    // extent x in [0,1]
-            optionalLightViewportClippingOut4[3] = (maxVal[1]-minVal[1])*0.5;    // extent y in [0,1]
+            const tpoat zero_point_five = (tpoat) 0.5;
+            optionalLightViewportClippingOut4[0] = minVal[0]*zero_point_five+zero_point_five;   // In [0,1] from [-1,1]
+            optionalLightViewportClippingOut4[1] = minVal[1]*zero_point_five+zero_point_five;   // In [0,1] from [-1,1]
+            optionalLightViewportClippingOut4[2] = (maxVal[0]-minVal[0])*zero_point_five;    // extent x in [0,1]
+            optionalLightViewportClippingOut4[3] = (maxVal[1]-minVal[1])*zero_point_five;    // extent y in [0,1]
 
             for (i=0;i<4;i++)   {
                optionalLightViewportClippingOut4[i]/=texelIncrement;    // viewport is in [0,texture_size]
@@ -1166,7 +1468,7 @@ void Teapot_Helper_GetLightViewProjectionMatrixExtra(tpoat* __restrict lvpMatrix
 
         if (optionalLVPMatrixForFrustumCullingUsageOut16)   {
             const int attemptToFixSwimming = (lvpMatrixOut16==lvpMatrixFallback) ? 1 : 0;   // Only if we don't want lvpMatrixOut16
-            float minmaxXY[4]={minVal[0]*radius,maxVal[0]*radius,minVal[1]*radius,maxVal[1]*radius};
+            float minmaxXY[4]={minVal[0]*cameraFrustumRadius,maxVal[0]*cameraFrustumRadius,minVal[1]*cameraFrustumRadius,maxVal[1]*cameraFrustumRadius};
             if (attemptToFixSwimming && texelIncrement>0)   {
                 for (i=0;i<4;i++) {
                     // This 'should' fix Shadow swimming (1) in the 'Stable Shadow Mapping Technique'
@@ -1178,7 +1480,7 @@ void Teapot_Helper_GetLightViewProjectionMatrixExtra(tpoat* __restrict lvpMatrix
             Teapot_Helper_Ortho(optionalLVPMatrixForFrustumCullingUsageOut16,
                          minmaxXY[0],minmaxXY[1],
                          minmaxXY[2],minmaxXY[3],
-                         0,-2.0*radius                      // For z, we just copy Helper_Ortho(lpMatrix,...)
+                         0,-(tpoat)2*cameraFrustumRadius                      // For z, we just copy Teapot_Helper_Ortho(lpMatrix,...)
                          );
             Teapot_Helper_MultMatrix(optionalLVPMatrixForFrustumCullingUsageOut16,optionalLVPMatrixForFrustumCullingUsageOut16,lvMatrix);
             // This 'should' fix Shadow swimming (2) in the 'Stable Shadow Mapping Technique'
@@ -1188,7 +1490,7 @@ void Teapot_Helper_GetLightViewProjectionMatrixExtra(tpoat* __restrict lvpMatrix
                 tpoat shadowOrigin[4]   = {0,0,0,1};
                 tpoat roundedOrigin[4]  = {0,0,0,0};
                 tpoat roundOffset[4]    = {0,0,0,0};
-                tpoat texelCoefficient = texelIncrement*2.0;
+                tpoat texelCoefficient = texelIncrement*(tpoat)2;
                 Teapot_Helper_MatrixMulPos(optionalLVPMatrixForFrustumCullingUsageOut16,shadowOrigin,shadowOrigin[0],shadowOrigin[1],shadowOrigin[2]);
                 for (i = 0; i < 2; i++) {// Or i<3 ?
                     shadowOrigin[i]/= texelCoefficient;
@@ -1204,6 +1506,12 @@ void Teapot_Helper_GetLightViewProjectionMatrixExtra(tpoat* __restrict lvpMatrix
 
 }
 
+// 'normalizedLightDirection3' must be in world space.
+void Teapot_Helper_GetLightViewProjectionMatrix(tpoat* __restrict lvpMatrixOut16
+                                                         ,const tpoat* __restrict cameraVMatrixInverse16,const tpoat* __restrict cameraFrustumCenterInWorldSpace3,tpoat cameraFrustumRadius
+                                                ,const tpoat*  __restrict normalizedLightDirection3,unsigned short shadowMapWidth,unsigned short shadowMapHeight)  {
+    Teapot_Helper_GetLightViewProjectionMatrixExtra(lvpMatrixOut16,cameraVMatrixInverse16,cameraFrustumCenterInWorldSpace3,cameraFrustumRadius,normalizedLightDirection3,shadowMapWidth,shadowMapHeight,0,0,0,0);
+}
 
 
 
@@ -1215,62 +1523,50 @@ static __inline void Teapot_Helper_Min3(tpoat* __restrict res3,const tpoat* a3,c
 static __inline void Teapot_Helper_Max3(tpoat* __restrict res3,const tpoat* a3,const tpoat* b3) {
     int i;for (i=0;i<3;i++) res3[i]=a3[i]>b3[i]?a3[i]:b3[i];
 }
-int Teapot_Helper_IsVisible(const tpoat frustumPlanes[6][4],const tpoat*__restrict mfMatrix16,tpoat aabbMinX,tpoat aabbMinY,tpoat aabbMinZ,tpoat aabbMaxX,tpoat aabbMaxY,tpoat aabbMaxZ) {
-    // It "should" performs AABB test. mfMatrix16 is the matrix M so that: F*M = mvpMatrix (F being the matrix used to extract the frustum planes). Here we use: F=pMatrix and M=mvMatrix, but it could be: F=vpMatrix and M=mMatrix too.
-    int i;
-    // AABB transformation by: http://dev.theomader.com/transform-bounding-boxes/
-    const tpoat* m = mfMatrix16;
-    const tpoat a[9] = {m[0]*aabbMinX,m[1]*aabbMinX,    m[2]*aabbMinX, m[4]*aabbMinY,m[5]*aabbMinY,m[6]*aabbMinY,   m[8]*aabbMinZ,m[9]*aabbMinZ,m[10]*aabbMinZ};
-    const tpoat b[9] = {m[0]*aabbMaxX,m[1]*aabbMaxX,    m[2]*aabbMaxX, m[4]*aabbMaxY,m[5]*aabbMaxY,m[6]*aabbMaxY,   m[8]*aabbMaxZ,m[9]*aabbMaxZ,m[10]*aabbMaxZ};
-    tpoat buf[18];
-    Teapot_Helper_Min3(&buf[0], &a[0],&b[0]);
-    Teapot_Helper_Min3(&buf[3], &a[3],&b[3]);
-    Teapot_Helper_Min3(&buf[6], &a[6],&b[6]);
-    Teapot_Helper_Max3(&buf[9], &a[0],&b[0]);
-    Teapot_Helper_Max3(&buf[12],&a[3],&b[3]);
-    Teapot_Helper_Max3(&buf[15],&a[6],&b[6]);
-    {
-        const tpoat aabb[6] = {
-            buf[0]+buf[ 3]+buf[ 6]+m[12], buf[ 1]+buf[ 4]+buf[ 7]+m[13], buf[ 2]+buf[ 5]+buf[ 8]+m[14],
-            buf[9]+buf[12]+buf[15]+m[12], buf[10]+buf[13]+buf[16]+m[13], buf[11]+buf[14]+buf[17]+m[14]
-        };
+int Teapot_Helper_IsVisible(const tpoat frustumPlanes[6][4],const tpoat*__restrict mfMatrix16,const tpoat* __restrict aabbCenter3,const tpoat* __restrict aabbHalfExtents3) {
+    // It "should" performs AABB test. mfMatrix16 is the matrix M so that:
+    // F*M = mvpMatrix (F being the matrix used to extract the frustum planes).
+    // Here we use: F=pMatrix and M=mvMatrix, but it could be: F=vpMatrix and M=mMatrix too.
+    // Start OBB => AABB transformation based on: http://dev.theomader.com/transform-bounding-boxes/
+    const tpoat *m = mfMatrix16, zero = (tpoat)0, *c = aabbCenter3, *he = aabbHalfExtents3;
+    tpoat aabb[6]; int i;
+    // Faster:
+    for (i=0;i<3;i++)   {
+        const tpoat hd=TEAPOT_FABS(m[i]*he[0])+TEAPOT_FABS(m[4+i]*he[1])+TEAPOT_FABS(m[8+i]*he[2]);
+        const tpoat tmp=m[i]*c[0]+m[4+i]*c[1]+m[8+i]*c[2]+m[12+i];aabb[i]=tmp-hd;aabb[3+i]=tmp+hd;
+    }
+    // End OBB => AABB transformation based on: http://dev.theomader.com/transform-bounding-boxes/
+    // FAST VERSION
+    for(i=0; i < 6; i++) {
+        const tpoat *pl = &frustumPlanes[i][0];
+        const int p[3] = {3*(int)(pl[0]>zero),3*(int)(pl[1]>zero),3*(int)(pl[2]>zero)};   // p[j] = 0 or 3
+        const tpoat dp = pl[0]*aabb[p[0]] + pl[1]*aabb[p[1]+1] + pl[2]*aabb[p[2]+2] + pl[3];
+        if (dp < 0) return 0;
+    }
+    // we still have a lot of false positives
+    return 1;
+}
 
-        // End AABB transformation
-
-        // FAST VERSION
-        {
-            for(i=0; i < 6; i++) {
-                const tpoat *pl = &frustumPlanes[i][0];
-                const int p[3] = {3*(int)(pl[0]>0.0f),3*(int)(pl[1]>0.0f),3*(int)(pl[2]>0.0f)};   // p[j] = 0 or 3
-                const tpoat dp = pl[0]*aabb[p[0]] + pl[1]*aabb[p[1]+1] + pl[2]*aabb[p[2]+2] + pl[3];
-                if (dp < 0) return 0;
-            }
-        }
-
-        // MUCH SLOWER VERSION
-        /*{
-        const tpoat aabb0=aabb[0],aabb1=aabb[1],aabb2=aabb[2];
-        const tpoat aabb3=aabb[3],aabb4=aabb[4],aabb5=aabb[5];
-        for(i=0; i < 6; i++)    {
-            int sum = 0;
-            const tpoat *pl = &frustumPlanes[i][0];
-            const tpoat plx=pl[0],ply=pl[1],plz=pl[2],plw=pl[3];
-            sum += (plx*aabb0+ply*aabb1+plz*aabb2+plw)<0?1:0;
-            sum += (plx*aabb3+ply*aabb1+plz*aabb2+plw)<0?1:0;
-            sum += (plx*aabb0+ply*aabb4+plz*aabb2+plw)<0?1:0;
-            sum += (plx*aabb3+ply*aabb4+plz*aabb2+plw)<0?1:0;
-            sum += (plx*aabb0+ply*aabb1+plz*aabb5+plw)<0?1:0;
-            sum += (plx*aabb3+ply*aabb1+plz*aabb5+plw)<0?1:0;
-            sum += (plx*aabb0+ply*aabb4+plz*aabb5+plw)<0?1:0;
-            sum += (plx*aabb3+ply*aabb4+plz*aabb5+plw)<0?1:0;
-            if (sum==8) return 0;
-        }
-    }*/
-
-        // Furthermore we still have a lot of false positives in both cases
+void Teapot_Helper_LowLevel_OBB2AABB(tpoat* __restrict aabbMinMax6Out,const tpoat*__restrict mfMatrix16,const tpoat* __restrict aabbCenter3, const tpoat* __restrict aabbHalfExtents3) {
+    // First part of Teapot_Helper_IsVisible(...)
+	const tpoat *m = mfMatrix16, *c = aabbCenter3, *he = aabbHalfExtents3;int i;
+    for (i=0;i<3;i++)   {
+        const tpoat hd=TEAPOT_FABS(m[i]*he[0])+TEAPOT_FABS(m[4+i]*he[1])+TEAPOT_FABS(m[8+i]*he[2]);
+        const tpoat tmp=m[i]*c[0]+m[4+i]*c[1]+m[8+i]*c[2]+m[12+i];aabbMinMax6Out[i]=tmp-hd;aabbMinMax6Out[3+i]=tmp+hd;
+    }
+}
+int Teapot_Helper_LowLevel_IsAABBVisible(const tpoat frustumPlanes[6][4],const tpoat* __restrict aabbMinMax6) {
+    // Second part of Teapot_Helper_IsVisible(...)
+    const tpoat* aabb = aabbMinMax6;const tpoat zero = (tpoat)0;int i;
+    for(i=0; i < 6; i++) {
+        const tpoat *pl = &frustumPlanes[i][0];
+        const int p[3] = {3*(int)(pl[0]>zero),3*(int)(pl[1]>zero),3*(int)(pl[2]>zero)};   // p[j] = 0 or 3
+        const tpoat dp = pl[0]*aabb[p[0]] + pl[1]*aabb[p[1]+1] + pl[2]*aabb[p[2]+2] + pl[3];
+        if (dp < 0) return 0;
     }
     return 1;
 }
+
 int Teapot_Helper_UnProject_MvpMatrixInv(tpoat winX,tpoat winY,tpoat winZ,const tpoat* __restrict mvpMatrixInv16,const int* viewport4,tpoat* objX,tpoat* objY,tpoat* objZ)    {
     // To compute the coordinates objX objY objZ , gluUnProject multiplies the normalized device coordinates by the inverse of model * proj as follows:
     // [objX objY objZ W] = INV(P*M) * ⁢ [2*(winX-view[0])/view[2]-1    2*(winY-view[1])/view[3]-1  2*winZ-1    1]
@@ -1296,62 +1592,181 @@ int Teapot_Helper_UnProject_MvpMatrixInv(tpoat winX,tpoat winY,tpoat winZ,const 
    if (objW!=0 && objW!=1) {(*objX)/=objW;(*objY)/=objW;(*objZ)/=objW;}
    return 1;
 }
-Teapot_MeshData* Teapot_MeshData_GetMeshUnderMouse(Teapot_MeshData* const* meshes,int numMeshes,int mouseX,int mouseY,const int* viewport4,tpoat* pOptionalDistanceOut) {
-    Teapot_MeshData* rv = 0;
-    tpoat vpMatrixInv[16];
+
+void Teapot_Helper_ExtractScalingFromTransformMatrix(const tpoat* __restrict m16,tpoat* __restrict scaOut3,tpoat* __restrict optionalMOut16)  {
+    int i,j,i4;tpoat tmp[3]={0,0,0},t;;
+    for (i=0;i<3;i++)   {
+        tpoat* v = &tmp[i];
+        i4=4*i;for (j=0;j<3;j++)   {t=m16[i4+j];(*v)+=t*t;}
+        if ((*v)<(tpoat)0.00009 || (*v)>(tpoat)1.00001) *v=sqrt(*v);
+        else *v=(tpoat)1;
+        if (scaOut3) scaOut3[i]=*v;
+    }
+    if (optionalMOut16) {
+        if (optionalMOut16!=m16) Teapot_Helper_CopyMatrix(optionalMOut16,m16);
+        Teapot_Helper_ScaleMatrix(optionalMOut16,(tpoat)1/tmp[0],(tpoat)1/tmp[1],(tpoat)1/tmp[2]);
+        //for (i=0;i<3;i++) {optionalMOut16[12+i]/=tmp[i];}   // must translation be scaled too?
+    }
+    //fprintf(stderr,"Extracted scaling: %1.4f,%1.4f,%1.4f\n",tmp[0],tmp[1],tmp[2]);
+}
+
+tpoat* Teapot_Helper_ExtractMatrix3x3(tpoat* __restrict m9Out,const tpoat* __restrict m16,tpoat* __restrict optionalTranslation3Out/*=NULL*/)  {
+    int i,j;for (i=0;i<3;i++) {for (j=0;j<3;j++)   m9Out[i*3+j] = m16[i*4+j];}
+    if (optionalTranslation3Out) {for (j=0;j<3;j++)   optionalTranslation3Out[j] = m16[12+j];}
+    return m9Out;
+}
+
+int Teapot_Helper_UnProject(tpoat winX,tpoat winY,tpoat winZ,const tpoat* __restrict mvMatrix16,const tpoat* __restrict pMatrix16,const int* viewport4,tpoat* objX,tpoat* objY,tpoat* objZ) {
+    tpoat mvpMatrixInv[16];Teapot_Helper_MultMatrix(mvpMatrixInv,pMatrix16,mvMatrix16);Teapot_Helper_InvertMatrix(mvpMatrixInv,mvpMatrixInv);
+    return Teapot_Helper_UnProject_MvpMatrixInv(winX,winY,winZ,mvpMatrixInv,viewport4,objX,objY,objZ);
+}
+
+void Teapot_Helper_UnProjectMouseCoords(tpoat* rayOriginOut3,tpoat* rayDirOut3,int mouseX,int mouseY,const tpoat* vpMatrixInv,const int* viewport4) {
+    // rayOriginOut3 and rayDirOut3 are in world space
     tpoat rayOrigin[3] = {0,0,0};
     tpoat rayDir[3] = {0,0,-1};
-    tpoat intersection_distance = 0;
-    int i,j;
-    if (pOptionalDistanceOut) *pOptionalDistanceOut=intersection_distance;
-    if (!meshes || numMeshes<=0 || !viewport4) return rv;
-
-    // 1) Find rayOrigin and rayDir (world space)
-    Teapot_Helper_MultMatrix(vpMatrixInv,TIS.pMatrix,TIS.vMatrix);
-    Teapot_Helper_InvertMatrix(vpMatrixInv,vpMatrixInv);
+    int i;
+    // Find rayOrigin and rayDir (world space)
+    //Teapot_Helper_MultMatrix(vpMatrixInv,TIS.pMatrix,TIS.vMatrix);
+    //Teapot_Helper_InvertMatrix(vpMatrixInv,vpMatrixInv);
     Teapot_Helper_UnProject_MvpMatrixInv(mouseX,viewport4[3]-mouseY-1,0.0,vpMatrixInv,viewport4,&rayOrigin[0],&rayOrigin[1],&rayOrigin[2]);
     Teapot_Helper_UnProject_MvpMatrixInv(mouseX,viewport4[3]-mouseY-1,1.0,vpMatrixInv,viewport4,&rayDir[0],&rayDir[1],&rayDir[2]);
     for (i=0;i<3;i++) rayDir[i]-=rayOrigin[i];
     Teapot_Helper_Vector3Normalize(rayDir);
     //printf("rayOrigin={%1.2f,%1.2f,%1.2f} rayDir={%1.2f,%1.2f,%1.2f}\n",rayOrigin[0],rayOrigin[1],rayOrigin[2],rayDir[0],rayDir[1],rayDir[2]);
+    for (i=0;i<3;i++) {
+        if (rayDirOut3) rayDirOut3[i] = rayDir[i];
+        if (rayOriginOut3) rayOriginOut3[i] = rayOrigin[i];
+    }
+}
+Teapot_MeshData* Teapot_MeshData_GetMeshUnderMouseFromRay(Teapot_MeshData* const* meshes,int numMeshes,const tpoat* rayOrigin3,const tpoat* rayDir3,tpoat* pOptionalDistanceOut) {
+    // rayOrigin3 and rayDirection3 are in world space
+    Teapot_MeshData* rv = 0;
+    tpoat intersection_distance = 0;
+    int i,j;
+    if (pOptionalDistanceOut) *pOptionalDistanceOut=intersection_distance;
+    if (!meshes || numMeshes<=0) return rv;
 
-    // 2) Loop all meshes and find OBB vs ray intersection
+    // Loop all meshes and find OBB vs ray intersection
     // Code based on: http://www.opengl-tutorial.org/miscellaneous/clicking-on-objects/picking-with-custom-ray-obb-function/ (WTFPL Public Licence)
     for (i=0;i<numMeshes;i++)   {
         const Teapot_MeshData* md = meshes[i];
-        const tpoat* obbMatrix = md->mMatrix;
-        const TeapotMeshEnum meshId = md->meshId;
+        if (md->active) {
+            const tpoat* obbMatrix = md->mMatrix;
+            const TeapotMeshEnum meshId = md->meshId;
+            tpoat tMin = 0;tpoat tMax = (tpoat)1000000000000;
+            int noCollisionDetected = 0;
+            tpoat obbPosDelta[3] =  {obbMatrix[12]-rayOrigin3[0],obbMatrix[13]-rayOrigin3[1],obbMatrix[14]-rayOrigin3[2]};
+            //const float scaling[3] = {meshId==TEAPOT_MESH_CAPSULE ? ((md->scaling[0]+md->scaling[2])*0.5) : md->scaling[0],md->scaling[1],meshId==TEAPOT_MESH_CAPSULE ? ((md->scaling[0]+md->scaling[2])*0.5) : md->scaling[2]};
+            const float* scaling = md->scaling;
+            tpoat aabbMin[3] = {TIS.aabbMin[meshId][0]*scaling[0],TIS.aabbMin[meshId][1]*scaling[1],TIS.aabbMin[meshId][2]*scaling[2]};
+            tpoat aabbMax[3] = {TIS.aabbMax[meshId][0]*scaling[0],TIS.aabbMax[meshId][1]*scaling[1],TIS.aabbMax[meshId][2]*scaling[2]};
+            //Teapot_Helper_Vector3Normalize(obbPosDelta);
+            //for (j=0;j<3;j++) obbPosDelta[i]=-obbPosDelta[i];
+
+            if (md->meshId==TEAPOT_MESH_CAPSULE) {
+                // Sorry, but capsules are special
+                const float sphereScaling = (md->scaling[0]+md->scaling[2])*0.5;
+#           ifndef TEAPOT_CENTER_MESHES_ON_FLOOR
+                aabbMin[1]+=0.5*(md->scaling[1]-2.0*sphereScaling);
+                aabbMax[1]-=0.5*(md->scaling[1]-2.0*sphereScaling);
+#           else //TEAPOT_CENTER_MESHES_ON_FLOOR
+                aabbMax[1]-=0.5*(md->scaling[1]-2.0*sphereScaling);
+#           endif //TEAPOT_CENTER_MESHES_ON_FLOOR
+                //printf("TEAPOT_MESH_CAPSULE: aabbMin(%1.3f,%1.3f,%1.3f) aabbMax(%1.3f,%1.3f,%1.3f) md->scaling[1]=%1.3f sphereScaling=%1.3f TIS.halfExtents[TEAPOT_MESH_HALF_SPHERE_DOWN][1]=%1.3f\n",aabbMin[0],aabbMin[1],aabbMin[2],aabbMax[0],aabbMax[1],aabbMax[2],md->scaling[1],sphereScaling,TIS.halfExtents[TEAPOT_MESH_HALF_SPHERE_DOWN][1]);
+            }
+
+            for (j=0;j<3;j++)   {
+                if (!noCollisionDetected)   {
+                    int j4 = 4*j;
+                    // Test intersection with the 2 planes perpendicular to the OBB's j axis
+#               ifdef OLD_CODE
+                    const tpoat axis[3] = {obbMatrix[j4],obbMatrix[j4+1],obbMatrix[j4+2]};
+                    const tpoat e = Teapot_Helper_Vector3Dot(axis, obbPosDelta);
+                    const tpoat f = Teapot_Helper_Vector3Dot(rayDir3, axis);
+#               else /* this works for scaling inside 'obbMatrix == md->mMatrix' too (but I'm not sure about TEAPOT_MESH_CAPSULE) */
+                    tpoat axis[3] = {obbMatrix[j4],obbMatrix[j4+1],obbMatrix[j4+2]},e,f;
+                    tpoat sca = Teapot_Helper_Vector3Dot(axis,axis);
+                    if (sca<(tpoat)0.00009 || sca>(tpoat)1.00001) {
+                        sca = sqrt(sca);
+                        aabbMin[j]*=sca;aabbMax[j]*=sca;
+                        sca=(tpoat)1/sca;axis[0]*=sca;axis[1]*=sca;axis[2]*=sca;
+                    }
+                    e = Teapot_Helper_Vector3Dot(axis, obbPosDelta);
+                    f = Teapot_Helper_Vector3Dot(rayDir3, axis);
+#               endif
+                    //if ( abs(f) > 0.001)  // @Flix: the reference code used this (but it does not work for me; so maybe my selection does not work with a projection ortho matrix...)
+                    {
+                        // Standard case
+                        // t1 and t2 now contain distances betwen ray origin and ray-plane intersections:
+                        tpoat t1 = (e+aabbMin[j])/f; // Intersection with the "left" plane
+                        tpoat t2 = (e+aabbMax[j])/f; // Intersection with the "right" plane
+                        // We want t1 to represent the nearest intersection, so if it's not the case, invert t1 and t2
+                        if (t1>t2)  {tpoat w=t1;t1=t2;t2=w;}
+                        if (t2 < tMax)    tMax = t2;
+                        if (t1 > tMin)    tMin = t1;
+                        // And here's the trick :
+                        // If "far" is closer than "near", then there is NO intersection.
+                        // See the images in the tutorials for the visual explanation.
+                        if (tMin > tMax) noCollisionDetected=1;
+
+                    }
+                    /*else    {
+                    // Rare case : the ray is almost parallel to the planes, so they don't have any "intersection"
+                    if(-e+aabbMin[j] > 0.0 || -e+aabbMax[j] < 0.0) noCollisionDetected=1;
+                }*/
+                }
+            }
+
+            if (!noCollisionDetected && (intersection_distance<=0 || intersection_distance>tMin))   {
+                intersection_distance = tMin;
+                rv = (Teapot_MeshData*) md;
+            }
+        }
+    }
+
+    if (pOptionalDistanceOut) *pOptionalDistanceOut=intersection_distance;
+    return rv;
+}
+
+
+int Teapot_Helper_GetMeshUnderMouseFromRayGeneric(int numMeshes,void (*getMeshDataCallback)(int idx,tpoat* __restrict mMatrix16InOut,tpoat aabbMinOut[3],tpoat aabbMaxOut[3],void* userData),const tpoat* rayOrigin3,const tpoat* rayDir3,tpoat* pOptionalDistanceOut,void* userData)   {
+    // ray is in world space
+    // code based on http://www.opengl-tutorial.org/miscellaneous/clicking-on-objects/picking-with-custom-ray-obb-function/
+    int i,j,rv = -1;
+    tpoat intersection_distance = 0;
+    tpoat obbMatrix[16]={1,0,0,0,   0,1,0,0,    0,0,1,0,    0,0,0,1};
+    if (pOptionalDistanceOut) *pOptionalDistanceOut=0.f;
+    if (!getMeshDataCallback || numMeshes==0) return -1;
+    for (i=0;i<numMeshes;i++)   {
         tpoat tMin = 0;tpoat tMax = (tpoat)1000000000000;
         int noCollisionDetected = 0;
-        tpoat obbPosDelta[3] =  {obbMatrix[12]-rayOrigin[0],obbMatrix[13]-rayOrigin[1],obbMatrix[14]-rayOrigin[2]};        
-        //const float scaling[3] = {meshId==TEAPOT_MESH_CAPSULE ? ((md->scaling[0]+md->scaling[2])*0.5) : md->scaling[0],md->scaling[1],meshId==TEAPOT_MESH_CAPSULE ? ((md->scaling[0]+md->scaling[2])*0.5) : md->scaling[2]};
-        const float* scaling = md->scaling;
-        tpoat aabbMin[3] = {TIS.aabbMin[meshId][0]*scaling[0],TIS.aabbMin[meshId][1]*scaling[1],TIS.aabbMin[meshId][2]*scaling[2]};
-        tpoat aabbMax[3] = {TIS.aabbMax[meshId][0]*scaling[0],TIS.aabbMax[meshId][1]*scaling[1],TIS.aabbMax[meshId][2]*scaling[2]};
-        //Teapot_Helper_Vector3Normalize(obbPosDelta);
-        //for (j=0;j<3;j++) obbPosDelta[i]=-obbPosDelta[i];
+        tpoat obbPosDelta[3],aabbMin[3],aabbMax[3];       
 
-        if (md->meshId==TEAPOT_MESH_CAPSULE) {
-            // Sorry, but capsules are special
-            const float sphereScaling = (md->scaling[0]+md->scaling[2])*0.5;
-#           ifndef TEAPOT_CENTER_MESHES_ON_FLOOR
-            aabbMin[1]+=0.5*(md->scaling[1]-2.0*sphereScaling);
-            aabbMax[1]-=0.5*(md->scaling[1]-2.0*sphereScaling);
-#           else //TEAPOT_CENTER_MESHES_ON_FLOOR
-            aabbMax[1]-=0.5*(md->scaling[1]-2.0*sphereScaling);
-#           endif //TEAPOT_CENTER_MESHES_ON_FLOOR
-            //printf("TEAPOT_MESH_CAPSULE: aabbMin(%1.3f,%1.3f,%1.3f) aabbMax(%1.3f,%1.3f,%1.3f) md->scaling[1]=%1.3f sphereScaling=%1.3f TIS.halfExtents[TEAPOT_MESH_HALF_SPHERE_DOWN][1]=%1.3f\n",aabbMin[0],aabbMin[1],aabbMin[2],aabbMax[0],aabbMax[1],aabbMax[2],md->scaling[1],sphereScaling,TIS.halfExtents[TEAPOT_MESH_HALF_SPHERE_DOWN][1]);
-        }
+        getMeshDataCallback(i,obbMatrix,aabbMin,aabbMax,userData);
 
+        for (j=0;j<3;j++)  {obbPosDelta[j] = obbMatrix[12+j]-rayOrigin3[j];}
         for (j=0;j<3;j++)   {
             if (!noCollisionDetected)   {
                 int j4 = 4*j;
                 // Test intersection with the 2 planes perpendicular to the OBB's j axis
+#               ifdef OLD_CODE
                 const tpoat axis[3] = {obbMatrix[j4],obbMatrix[j4+1],obbMatrix[j4+2]};
                 const tpoat e = Teapot_Helper_Vector3Dot(axis, obbPosDelta);
-                const tpoat f = Teapot_Helper_Vector3Dot(rayDir, axis);
+                const tpoat f = Teapot_Helper_Vector3Dot(rayDir3, axis);
+#               else /* this works for scaling inside matrix too */
+                tpoat axis[3] = {obbMatrix[j4],obbMatrix[j4+1],obbMatrix[j4+2]},e,f;
+                tpoat sca = Teapot_Helper_Vector3Dot(axis,axis);
+                if (sca<(tpoat)0.00009 || sca>(tpoat)1.00001) {
+                    sca = sqrt(sca);
+                    aabbMin[j]*=sca;aabbMax[j]*=sca;
+                    sca=(tpoat)1/sca;axis[0]*=sca;axis[1]*=sca;axis[2]*=sca;
+                }
+                e = Teapot_Helper_Vector3Dot(axis, obbPosDelta);
+                f = Teapot_Helper_Vector3Dot(rayDir3, axis);
+#               endif
 
-                //if ( abs(f) > 0.001)  // @Flix: the reference code used this (but it does not work for me; so maybe my selection does not work with a projection ortho matrix...)
+                //if ( TEAPOT_FABS(f) > tpoat(0.001))  // @Flix: the reference code used this
                 {
                     // Standard case
                     // t1 and t2 now contain distances betwen ray origin and ray-plane intersections:
@@ -1369,19 +1784,45 @@ Teapot_MeshData* Teapot_MeshData_GetMeshUnderMouse(Teapot_MeshData* const* meshe
                 }
                 /*else    {
                     // Rare case : the ray is almost parallel to the planes, so they don't have any "intersection"
-                    if(-e+aabbMin[j] > 0.0 || -e+aabbMax[j] < 0.0) noCollisionDetected=1;
+                    if(-e+aabbMin[j] > tpoat(0.0) || -e+aabbMax[j] < tpoat(0.0)) noCollisionDetected=1;
                 }*/
             }
         }
 
         if (!noCollisionDetected && (intersection_distance<=0 || intersection_distance>tMin))   {
             intersection_distance = tMin;
-            rv = (Teapot_MeshData*) md;
+            rv = i;
         }
     }
 
     if (pOptionalDistanceOut) *pOptionalDistanceOut=intersection_distance;
     return rv;
+}
+
+Teapot_MeshData* Teapot_MeshData_GetMeshUnderMouse(Teapot_MeshData* const* meshes,int numMeshes,int mouseX,int mouseY,const int* viewport4,tpoat* __restrict pOptionalDistanceOut) {
+    Teapot_MeshData* rv = 0;
+    tpoat vpMatrixInv[16];
+    tpoat rayOrigin[3] = {0,0,0};
+    tpoat rayDir[3] = {0,0,-1};
+    if (!meshes || numMeshes<=0 || !viewport4) return rv;
+
+    Teapot_Helper_MultMatrix(vpMatrixInv,TIS.pMatrix,TIS.vMatrix);
+    Teapot_Helper_InvertMatrix(vpMatrixInv,vpMatrixInv);
+    Teapot_Helper_UnProjectMouseCoords(rayOrigin,rayDir,mouseX,mouseY,vpMatrixInv,viewport4);
+
+    return Teapot_MeshData_GetMeshUnderMouseFromRay(meshes,numMeshes,rayOrigin,rayDir,pOptionalDistanceOut);
+}
+
+tpoat* Teapot_Helper_GetPickMatrix(tpoat* __restrict mOut16,tpoat x,tpoat y,tpoat width,tpoat height,const int* viewport4) {
+    tpoat *m = mOut16,sx,sy;int i;
+    if (width<=0 || height<=0)  return m;
+    m[0]=m[5]=m[10]=m[15]=1;
+    m[1]=m[2]=m[3]=m[4]=m[6]=m[7]=m[8]=m[9]=m[11]=m[14]=0;
+    m[12]=(viewport4[2]-2*(x-viewport4[0]))/width;
+    m[13]=(viewport4[3]-2*(y-viewport4[1]))/height;
+    sx=viewport4[2]/width;sy=viewport4[3]/height;
+    for (i=0;i<3;i++) {m[i]*=sx;m[4+i]*=sy;}
+    return m;
 }
 
 
@@ -1395,7 +1836,7 @@ void Teapot_SetViewMatrixAndLightDirection(const tpoat vMatrix[16],tpoat lightDi
     // lightDirectionViewSpace = v3_norm(m4_mul_dir(vMatrix,light_direction));
     Teapot_Helper_CopyMatrix(TIS.vMatrix,vMatrix);
 #   ifdef TEAPOT_SHADER_USE_SHADOW_MAP
-    Teapot_Helper_InvertMatrixFast(TIS.vMatrixInverse,TIS.vMatrix);
+    Teapot_Helper_InvertTransformMatrixFast(TIS.vMatrixInverse,TIS.vMatrix);
 #   endif //TEAPOT_SHADER_USE_SHADOW_MAP*/
     //int i;for (i=0;i<16;i++) TIS.vMatrix[i]=vMatrix[i];	// what's faster ?
     TIS.lightDirectionViewSpace[0] = lightDirectionWorldSpace[0]*TIS.vMatrix[0] + lightDirectionWorldSpace[1]*TIS.vMatrix[4] + lightDirectionWorldSpace[2]*TIS.vMatrix[8];
@@ -1406,6 +1847,7 @@ void Teapot_SetViewMatrixAndLightDirection(const tpoat vMatrix[16],tpoat lightDi
     Teapot_Helper_GlUniform3v(TIS.uLoc_lightVector,1,TIS.lightDirectionViewSpace);
     glUseProgram(0);
 }
+
 void Teapot_SetProjectionMatrix(const tpoat pMatrix[16])    {
     Teapot_Helper_CopyMatrix(TIS.pMatrix,pMatrix);
 #   ifdef TEAPOT_ENABLE_FRUSTUM_CULLING
@@ -1414,6 +1856,19 @@ void Teapot_SetProjectionMatrix(const tpoat pMatrix[16])    {
     glUseProgram(TIS.programId);
     Teapot_Helper_GlUniformMatrix4v(TIS.uLoc_pMatrix, 1 /*only setting 1 matrix*/, GL_FALSE /*transpose?*/, pMatrix);
     glUseProgram(0);
+}
+void Teapot_SetProjectionMatrixf(const float pMatrix[16])    {
+#   ifndef TEAPOT_USE_DOUBLE_PRECISION
+    Teapot_SetProjectionMatrix(pMatrix);
+#   else
+    Teapot_Helper_ConvertMatrixf2d16(TIS.pMatrix,pMatrix);
+#   ifdef TEAPOT_ENABLE_FRUSTUM_CULLING
+    Teapot_Helper_GetFrustumPlaneEquations(TIS.pMatrixFrustum,TIS.pMatrix,0);   // Last arg can probably be 0...
+#   endif
+    glUseProgram(TIS.programId);
+    glUniformMatrix4fv(TIS.uLoc_pMatrix, 1 /*only setting 1 matrix*/, GL_FALSE /*transpose?*/, pMatrix);
+    glUseProgram(0);
+#   endif
 }
 
 void Teapot_GetViewMatrix(tpoat* res16) {Teapot_Helper_CopyMatrix(res16,TIS.vMatrix);}
@@ -1451,6 +1906,20 @@ void Teapot_SetShadowMapTexelIncrement(float shadowMapTexelIncrementX,float shad
     glUniform2f(TIS.uLoc_shadowMapTexelIncrement,shadowMapTexelIncrementX,shadowMapTexelIncrementY);
     glUseProgram(0);
 }
+void Teapot_LowLevel_SetMvMatrixUniformWithShadowSupport(const tpoat mvMatrix[16])  {
+    tpoat tmp[16];
+    Teapot_Helper_MultMatrix(tmp,TIS.biasedShadowVpMatrix,mvMatrix);
+    Teapot_Helper_GlUniformMatrix4v(TIS.uLoc_biasedShadowMvpMatrix,1,GL_FALSE,tmp);
+    Teapot_LowLevel_SetMvMatrixUniform(mvMatrix);
+}
+void Teapot_LowLevel_SetMvMatrixUniformWithShadowSupportFloat(const float mvMatrix[16]) {
+#   ifdef TEAPOT_USE_DOUBLE_PRECISION
+    tpoat tmp[16];Teapot_Helper_ConvertMatrixf2d16(tmp,mvMatrix);
+    Teapot_LowLevel_SetMvMatrixUniformWithShadowSupport(tmp);
+#   else
+    Teapot_LowLevel_SetMvMatrixUniformWithShadowSupport(mvMatrix);
+#   endif
+}
 #endif //TEAPOT_SHADER_USE_SHADOW_MAP
 
 #ifdef TEAPOT_SHADER_FOG
@@ -1466,6 +1935,7 @@ void Teapot_SetFogDistances(float startDistance,float endDistance)  {
 }
 #endif //TEAPOT_SHADER_FOG
 
+
 void Teapot_LowLevel_EnableVertexAttributes(int enableVertexAttribArray,int enableNormalAttribArray) {
     if (enableVertexAttribArray) glEnableVertexAttribArray(TIS.aLoc_vertex);
     if (enableNormalAttribArray) glEnableVertexAttribArray(TIS.aLoc_normal);
@@ -1476,6 +1946,10 @@ void Teapot_LowLevel_BindVertexBufferObject(void) {
     glVertexAttribPointer(TIS.aLoc_normal, 3, GL_FLOAT, GL_FALSE, sizeof(float)*6, (void*)(sizeof(float)*3));
 
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, TIS.elementBuffer);
+}
+void Teapot_LowLevel_BindVertexBufferObjectAndEnableVertexAttributes(int enableVertexAttribArray,int enableNormalAttribArray) {
+    Teapot_LowLevel_EnableVertexAttributes(enableVertexAttribArray,enableNormalAttribArray);
+    Teapot_LowLevel_BindVertexBufferObject();
 }
 void Teapot_LowLevel_BindShaderProgram(void) {
     glUseProgram(TIS.programId);
@@ -1489,6 +1963,10 @@ void Teapot_LowLevel_UnbindVertexBufferObject(void) {
 void Teapot_LowLevel_DisableVertexAttributes(int disableVertexAttribArray,int disableNormalAttribArray) {
     if (disableVertexAttribArray) glDisableVertexAttribArray(TIS.aLoc_vertex);
     if (disableNormalAttribArray) glDisableVertexAttribArray(TIS.aLoc_normal);
+}
+void Teapot_LowLevel_UnbindVertexBufferObjectAndDisableVertexAttributes(int disableVertexAttribArray,int disableNormalAttribArray) {
+    Teapot_LowLevel_UnbindVertexBufferObject();
+    Teapot_LowLevel_DisableVertexAttributes(disableVertexAttribArray,disableNormalAttribArray);
 }
 
 void Teapot_PreDraw(void)   {
@@ -1511,7 +1989,7 @@ void Teapot_SetScaling(float scalingX, float scalingY, float scalingZ)  {
 }
 void Teapot_SetColor(float R,float G,float B,float A)  {
     TIS.color[0]=R;TIS.color[1]=G;TIS.color[2]=B;TIS.color[3]=A;
-    glUniform4fv(TIS.uLoc_color,1,TIS.color);
+    /*glUniform4fv(TIS.uLoc_color,1,TIS.color);
     if (TIS.colorMaterialEnabled) {
         const float ambFac = 0.25f;
         Teapot_SetColorAmbient(R*ambFac,G*ambFac,B*ambFac);
@@ -1521,17 +1999,64 @@ void Teapot_SetColor(float R,float G,float B,float A)  {
             Teapot_SetColorSpecular(R*speFac,G*speFac,B*speFac,-1.f*A);
         }
 #       endif //TEAPOT_SHADER_SPECULAR
+    }*/
+    if (TIS.colorMaterialEnabled) {
+        const float ambFac = 0.25f;
+        TIS.colorAmbient[0]=R*ambFac;TIS.colorAmbient[1]=G*ambFac;TIS.colorAmbient[2]=B*ambFac;
+#       ifdef TEAPOT_SHADER_SPECULAR
+        {
+            const float speFac = 0.8f * A;
+            TIS.colorSpecular[0]=R*speFac;TIS.colorSpecular[1]=G*speFac;TIS.colorSpecular[2]=B*speFac;
+            if (A<0) TIS.colorSpecular[3]=-1.f*A;
+            glUniform4fv(TIS.uLoc_color,3,TIS.color);   // 3 vec4 in one call!
+        }
+#       else //TEAPOT_SHADER_SPECULAR
+        glUniform4fv(TIS.uLoc_color,2,TIS.color);   // 2 vec4 in one call!
+#       endif //TEAPOT_SHADER_SPECULAR
     }
+    else glUniform4fv(TIS.uLoc_color,1,TIS.color);
 }
 void Teapot_SetColorAmbient(float R,float G,float B)  {
     TIS.colorAmbient[0]=R;TIS.colorAmbient[1]=G;TIS.colorAmbient[2]=B;
     glUniform4fv(TIS.uLoc_colorAmbient,1,TIS.colorAmbient);
+}
+void Teapot_SetColorAmbientAndDiffuse(const float ambient[3],const float diffuse[4])    {
+#   ifdef TEAPOT_HINT_STRICTER_COLOR_MATERIAL
+    if (!TIS.colorMaterialEnabled)  {
+#   endif
+        int k;for (k=0;k<3;k++)   {
+            TIS.color[k]=diffuse[k];
+            TIS.colorAmbient[k]=ambient[k];
+        }
+        TIS.color[3]=diffuse[3];
+        glUniform4fv(TIS.uLoc_color,2,TIS.color);   // 2 vec4 in one call!
+#   ifdef TEAPOT_HINT_STRICTER_COLOR_MATERIAL
+    }
+    else Teapot_SetColor(diffuse[0],diffuse[1],diffuse[2],diffuse[3]);
+#   endif
 }
 #ifdef TEAPOT_SHADER_SPECULAR
 void Teapot_SetColorSpecular(float R,float G,float B,float SHI) {
     TIS.colorSpecular[0]=R;TIS.colorSpecular[1]=G;TIS.colorSpecular[2]=B;
     if (SHI>0) TIS.colorSpecular[3]=SHI;
     glUniform4f(TIS.uLoc_colorSpecular,R,G,B,TIS.colorSpecular[3]);
+}
+void Teapot_SetColorAmbientDiffuseAndSpecular(const float ambient[3],const float diffuse[4],const float specular_plus_shininess[4])    {
+#   ifdef TEAPOT_HINT_STRICTER_COLOR_MATERIAL
+    if (!TIS.colorMaterialEnabled)  {
+#   endif
+        int k;for (k=0;k<3;k++)   {
+            TIS.color[k]=diffuse[k];
+            TIS.colorAmbient[k]=ambient[k];
+            TIS.colorSpecular[k]=specular_plus_shininess[k];
+        }
+        TIS.color[3]=diffuse[3];
+        if (specular_plus_shininess[3]>0) TIS.colorSpecular[3]=specular_plus_shininess[3];
+        glUniform4fv(TIS.uLoc_color,3,TIS.color);   // 3 vec4 in one call!
+#   ifdef TEAPOT_HINT_STRICTER_COLOR_MATERIAL
+    }
+    else Teapot_SetColor(diffuse[0],diffuse[1],diffuse[2],diffuse[3]);
+#   endif
 }
 #endif //TEAPOT_SHADER_SPECULAR
 
@@ -1599,84 +2124,36 @@ void Teapot_Draw_Mv(const tpoat mvMatrix[16], TeapotMeshEnum meshId)    {
 #   ifdef TEAPOT_ENABLE_FRUSTUM_CULLING
     if (meshId<TEAPOT_MESH_TEXT_X || meshId>TEAPOT_MESH_TEXT_Z) {
         const float scaling[3] = {TIS.scaling[0],TIS.scaling[1],TIS.scaling[2]};
-        const float aabbMin[3] = {TIS.aabbMin[meshId][0]*scaling[0],TIS.aabbMin[meshId][1]*scaling[1],TIS.aabbMin[meshId][2]*scaling[2]};
-        const float aabbMax[3] = {TIS.aabbMax[meshId][0]*scaling[0],TIS.aabbMax[meshId][1]*scaling[1],TIS.aabbMax[meshId][2]*scaling[2]};
-        //tpoat matrix[16];Teapot_Helper_InvertMatrixFast(matrix,mvMatrix);
+        const float aabbCenter[3] = {TIS.centerPoint[meshId][0]*scaling[0],TIS.centerPoint[meshId][1]*scaling[1],TIS.centerPoint[meshId][2]*scaling[2]};
+        const float aabbHalfExtents[3] = {TIS.halfExtents[meshId][0]*scaling[0],TIS.halfExtents[meshId][1]*scaling[1],TIS.halfExtents[meshId][2]*scaling[2]};
+        //tpoat matrix[16];Teapot_Helper_InvertTransformMatrixFast(matrix,mvMatrix);
 
         if (!Teapot_Helper_IsVisible(TIS.pMatrixFrustum,
                                      mvMatrix,
-                                     aabbMin[0],aabbMin[1],aabbMin[2],
-                                     aabbMax[0],aabbMax[1],aabbMax[2]))
+                                     aabbCenter,
+                                     aabbHalfExtents))
                                      {
-            //fprintf(stderr,"MeshId=%d\n",meshId);
+            //fprintf(stderr,"MeshId=%d culled\n",meshId);
             return;
         }
     }
 #   endif //TEAPOT_ENABLE_FRUSTUM_CULLING
 
-#   ifdef TEAPOT_SHADER_USE_NORMAL_MATRIX
+#   ifdef TEAPOT_SHADER_USE_ACCURATE_NORMALS
+#   ifndef TEAPOT_SHADER_HINT_ACCURATE_NORMALS_GPU
     {
+        // We must calculate and sent u_nCoefficients: https://lxjk.github.io/2017/10/01/Stop-Using-Normal-Matrix.html
         const tpoat* m = mvMatrix;
-        tpoat nMatrix3x3Out[9];
-        tpoat* n = nMatrix3x3Out;
-        // We need to invert mvMatrix[9] before and then trnspose it on the fly--------
-        // Create shorthands to access matrix members
-        tpoat m00 = m[0],  m10 = m[1],  m20 = m[2];
-        tpoat m01 = m[4],  m11 = m[5],  m21 = m[6];
-        tpoat m02 = m[8],  m12 = m[9],  m22 = m[10];
-        /*tpoat m00 = m[0],  m10 = m[4],  m20 = m[8];
-        tpoat m01 = m[1],  m11 = m[5],  m21 = m[9];
-        tpoat m02 = m[2],  m12 = m[6],  m22 = m[10];*/
-
-#       ifndef TEAPOT_SHADER_USE_NORMAL_MATRIX_NO_OPTIMIZE
-        // Optional optimization:
-        const tpoat sqcol0 = m00*m00 + m10*m10 + m20*m20;
-        const tpoat sqcol1 = m01*m01 + m11*m11 + m21*m21;
-        const tpoat sqcol2 = m02*m02 + m12*m12 + m22*m22;
-        const tpoat eps = 0.0001;
-        if (fabs(sqcol0-sqcol1)<eps && fabs(sqcol0-sqcol2)<eps && fabs(sqcol1-sqcol2)<eps)  {
-            //save a lot of expesive calculations and just set nMatrix to mvMatrix.3x3 (will be renormalized in the shader anyway)
-            n[0]=m00; n[1]=m10; n[2]=m20;
-            n[3]=m01; n[4]=m11; n[5]=m21;
-            n[6]=m02; n[7]=m12; n[8]=m22;
-        }
-        else
-#       endif //TEAPOT_SHADER_USE_NORMAL_MATRIX_NO_OPTIMIZE
-        {
-            // Calculate cofactor matrix
-            tpoat c00 =   m11*m22 - m12*m21,   c10 = -(m01*m22 - m02*m21),  c20 =   m01*m12 - m02*m11;
-            tpoat c01 = -(m10*m22 - m12*m20),  c11 =   m00*m22 - m02*m20,   c21 = -(m00*m12 - m02*m10);
-            tpoat c02 =   m10*m21 - m11*m20,   c12 = -(m00*m21 - m01*m20),  c22 =   m00*m11 - m01*m10;
-
-            tpoat i00,i10,i20, i01,i11,i21, i02,i12,i22;
-
-            // Caclculate the determinant by using the already calculated determinants
-            // in the cofactor matrix.
-            // Second sign is already minus from the cofactor matrix.
-            tpoat det = m00*c00 + m10*c10 + m20 * c20;
-            if (fabs(det) < 0.00001)    {
-                // return identity
-                n[0]=n[4]=n[8]=1;
-                n[1]=n[2]=n[3]=n[5]=n[6]=n[7]=0;
-                return;
-            }
-
-            // Calcuate inverse by dividing the transposed cofactor matrix by the determinant.
-            i00 = c00 / det;  i10 = c01 / det;  i20 = c02 / det;
-            i01 = c10 / det;  i11 = c11 / det;  i21 = c12 / det;
-            i02 = c20 / det;  i12 = c21 / det;  i22 = c22 / det;
-
-            // Transpose it on the fly
-            n[0] = i00; n[1] = i01; n[2] = i02;
-            n[3] = i10; n[4] = i11; n[5] = i12;
-            n[6] = i20; n[7] = i21; n[8] = i22;
-            /*n[0] = i00; n[3] = i01; n[6] = i02;
-            n[1] = i10; n[4] = i11; n[7] = i12;
-            n[2] = i20; n[5] = i21; n[8] = i22;*/
-        }
-        Teapot_Helper_GlUniformMatrix3v(TIS.uLoc_nMatrix, 1 /*only setting 1 matrix*/, GL_FALSE /*transpose?*/, nMatrix3x3Out);
+        const float scaling[3] = {TIS.scaling[0],TIS.scaling[1],TIS.scaling[2]};
+        const tpoat nCoeff[3] = {
+            (tpoat)1/(Teapot_Helper_Vector3Dot(&m[0],&m[0])*(tpoat)scaling[0]),
+            (tpoat)1/(Teapot_Helper_Vector3Dot(&m[4],&m[4])*(tpoat)scaling[1]),
+            (tpoat)1/(Teapot_Helper_Vector3Dot(&m[8],&m[8])*(tpoat)scaling[2])
+        };
+        glUniform3f(TIS.uLoc_nCoefficients,(float)nCoeff[0],(float)nCoeff[1],(float)nCoeff[2]);
     }
-#   endif //TEAPOT_SHADER_USE_NORMAL_MATRIX
+#   endif //TEAPOT_SHADER_HINT_ACCURATE_NORMALS_GPU
+#   endif //TEAPOT_SHADER_USE_ACCURATE_NORMALS
 
 
 #   ifdef TEAPOT_SHADER_USE_SHADOW_MAP
@@ -1685,7 +2162,7 @@ void Teapot_Draw_Mv(const tpoat mvMatrix[16], TeapotMeshEnum meshId)    {
     Teapot_Helper_MultMatrix(tmp,TIS.biasedShadowVpMatrix,mvMatrix);
     Teapot_Helper_GlUniformMatrix4v(TIS.uLoc_biasedShadowMvpMatrix,1,GL_FALSE,tmp);
     }
-#   endif //TEAPOT_SHADER_USE_SHADOW_MAP
+#   endif
 
     Teapot_Helper_GlUniformMatrix4v(TIS.uLoc_mvMatrix,1,GL_FALSE,mvMatrix);
 
@@ -1895,6 +2372,23 @@ void Teapot_Draw_Mv(const tpoat mvMatrix[16], TeapotMeshEnum meshId)    {
                 Teapot_SetColor(pushColor[0],pushColor[1],pushColor[2],pushColor[3]);
             }
             break;
+            case TEAPOT_MESH_FLIPPER_RIGHT:
+            case TEAPOT_MESH_FLIPPER_LEFT:  {
+                int startInds = TIS.startInds[meshId];
+                const int numInds[2] = {384,180};       // Rubber, White
+                const float pushColor[4] = {TIS.color[0],TIS.color[1],TIS.color[2],TIS.color[3]};
+
+                glDrawElements(GL_TRIANGLES,numInds[0],GL_UNSIGNED_SHORT,(const void*) (startInds*sizeof(unsigned short)));
+                startInds+=numInds[0];
+
+                Teapot_SetColor(0.9f,0.9f,0.9f,pushColor[3]);
+                glDrawElements(GL_TRIANGLES,numInds[1],GL_UNSIGNED_SHORT,(const void*) (startInds*sizeof(unsigned short)));
+                startInds+=numInds[1];
+                //if (startInds!=TIS.startInds[meshId]+TIS.numInds[meshId]) {printf("ERROR: startInds(=%d)!=TIS.startInds[%d](=%d)+TIS.numInds[%d](=%d)\n",startInds,(int)meshId,TIS.startInds[meshId],(int)meshId,TIS.numInds[meshId]);exit(1);}
+
+                Teapot_SetColor(pushColor[0],pushColor[1],pushColor[2],pushColor[3]);
+            }
+            break;
             case TEAPOT_MESH_SLEDGE: {
                 int startInds = TIS.startInds[meshId];
                 const int numInds[2] = {68*3,144*3};
@@ -1926,12 +2420,80 @@ void Teapot_Draw_Mv(const tpoat mvMatrix[16], TeapotMeshEnum meshId)    {
 
 }
 
+void Teapot_Draw_MvFloat(const float mvMatrix[16], TeapotMeshEnum meshId)    {
+#   ifndef TEAPOT_USE_DOUBLE_PRECISION
+    Teapot_Draw_Mv(mvMatrix,meshId);
+#   else
+    tpoat tmp[16];Teapot_Helper_ConvertMatrixf2d16(tmp,mvMatrix);
+    Teapot_Draw_Mv(tmp,meshId);
+#   endif
+}
+
 void Teapot_Draw(const tpoat mMatrix[16], TeapotMeshEnum meshId) {
     tpoat mvMatrix[16]; // mvMatrix = vMatrix * mMatrix;
     if (meshId==TEAPOT_MESH_COUNT) return;
     Teapot_Helper_MultMatrix(mvMatrix,TIS.vMatrix,mMatrix);
     Teapot_Draw_Mv(mvMatrix,meshId);
 }
+
+
+void Teapot_DrawAabb_Mv(const tpoat mvMatrix[16], TeapotMeshEnum meshId, const float *scaling3)   {
+    // user should set color and line width before the call (scaling is discarded)
+    if (meshId<TEAPOT_MESH_PIVOT3D) {
+        float pushScaling[3] = {TIS.scaling[0],TIS.scaling[1],TIS.scaling[2]};
+        float scaling[3],userScaling[3],aabb[3],center[3];
+        tpoat mat[16];int k;
+
+        // Fill 'userScaling':
+        if (scaling3) {userScaling[0]=scaling3[0];userScaling[1]=scaling3[1];userScaling[2]=scaling3[2];}
+        else userScaling[0]=userScaling[1]=userScaling[2]=1.f;
+
+        // Fill 'scaling':
+        Teapot_GetMeshAabbExtents(meshId,aabb);
+        if (meshId==TEAPOT_MESH_CAPSULE)    {
+            // Sorry, but capsules are special (Teapot_SetScaling(...) does not scale them, because we want the two half-spheres to be always regular)
+            const float sphereScaling = (userScaling[0]+userScaling[2])*0.5;
+            scaling[0]=aabb[0]*sphereScaling;scaling[2]=aabb[2]*sphereScaling;
+            aabb[1]*=userScaling[1];aabb[1]-=1.0*(userScaling[1]-sphereScaling);
+            scaling[1] = aabb[1];
+        }
+        else {int i;for (i=0;i<3;i++) scaling[i]=aabb[i]*userScaling[i];}
+
+        // Apply scaling:
+        Teapot_SetScaling(scaling[0],scaling[1],scaling[2]);
+
+        // Well, these lines that replace 'mvMatrix' with 'mat' are just for the meshes
+        // that are not centered in {0,0,0} (like FLIPPER meshes).
+        Teapot_Helper_CopyMatrix(mat,mvMatrix);
+        center[0] = TIS.centerPoint[meshId][0]*userScaling[0];
+        center[1] = TIS.centerPoint[meshId][1]*userScaling[1];
+        center[2] = TIS.centerPoint[meshId][2]*userScaling[2];
+        for (k=0;k<3;k++) mat[12+k]+=mat[k]*center[0]+mat[k+4]*center[1]+mat[k+8]*center[2];
+
+        // Draw an AABB around the shape:
+        Teapot_Draw_Mv(mat,TEAPOT_MESHLINES_CUBE_EDGES);
+
+        // Pop scaling:
+        Teapot_SetScaling(pushScaling[0],pushScaling[1],pushScaling[2]);
+    }
+}
+void Teapot_DrawAabb_MvFloat(const float mvMatrix[16],TeapotMeshEnum meshId,const float* scaling3)  {
+#   ifndef TEAPOT_USE_DOUBLE_PRECISION
+    Teapot_DrawAabb_Mv(mvMatrix,meshId,scaling3);
+#   else
+    tpoat tmp[16];Teapot_Helper_ConvertMatrixf2d16(tmp,mvMatrix);
+    Teapot_DrawAabb_Mv(tmp,meshId,scaling3);
+#   endif
+}
+void Teapot_DrawAabb(const tpoat mMatrix[16],TeapotMeshEnum meshId,const float* scaling3)   {
+    tpoat mvMatrix[16]; // mvMatrix = vMatrix * mMatrix;
+    if (meshId>=TEAPOT_MESH_PIVOT3D) return;
+    Teapot_Helper_MultMatrix(mvMatrix,TIS.vMatrix,mMatrix);
+    Teapot_DrawAabb_Mv(mvMatrix,meshId,scaling3);
+}
+
+
+
 
 void Teapot_LowLevel_StartDisablingLighting(void) {
     TIS.colorAmbient[0]=TIS.colorAmbient[1]=TIS.colorAmbient[2]=0.8f;TIS.colorAmbient[3]=0.f;
@@ -1940,6 +2502,14 @@ void Teapot_LowLevel_StartDisablingLighting(void) {
 
 void Teapot_LowLevel_SetMvMatrixUniform(const tpoat mvMatrix[16])   {
     Teapot_Helper_GlUniformMatrix4v(TIS.uLoc_mvMatrix, 1 /*only setting 1 matrix*/, GL_FALSE /*transpose?*/, mvMatrix);
+}
+void Teapot_LowLevel_SetMvMatrixUniformFloat(const float mvMatrix[16]) {
+#   ifdef TEAPOT_USE_DOUBLE_PRECISION
+    tpoat tmp[16];Teapot_Helper_ConvertMatrixf2d16(tmp,mvMatrix);
+    Teapot_LowLevel_SetMvMatrixUniform(tmp);
+#   else
+    Teapot_LowLevel_SetMvMatrixUniform(mvMatrix);
+#   endif
 }
 void Teapot_LowLevel_DrawElements(TeapotMeshEnum meshId)    {
     glDrawElements(meshId<TEAPOT_FIRST_MESHLINES_INDEX ? GL_TRIANGLES : GL_LINES,TIS.numInds[meshId],GL_UNSIGNED_SHORT,(const void*) (TIS.startInds[meshId]*sizeof(unsigned short)));
@@ -1958,19 +2528,15 @@ void Teapot_PostDraw(void)  {
 }
 
 
-static int _Teapot_MeshData_Comparer(const void* pmd0,const void* pmd1) {
+int Teapot_MeshData_Depth_Sorter(const void* pmd0,const void* pmd1) {
     const Teapot_MeshData* md0 = *((const Teapot_MeshData* const*) (pmd0));
     const Teapot_MeshData* md1 = *((const Teapot_MeshData* const*) (pmd1));
     if (md0->color[3]<1.f)   {
-        if (md1->color[3]<1.f) {
-            return md1->mvMatrix[14]>md0->mvMatrix[14]?-1:1;
-            //return fabsf(md1->mvMatrix[14])-fabsf(md0->mvMatrix[14]);
-            //return (md1->mvMatrix[12]*md1->mvMatrix[12]+md1->mvMatrix[13]*md1->mvMatrix[13]+md1->mvMatrix[14]*md1->mvMatrix[14]) -
-            //        (md0->mvMatrix[12]*md0->mvMatrix[12]+md0->mvMatrix[13]*md0->mvMatrix[13]+md0->mvMatrix[14]*md0->mvMatrix[14]);
-	}
+        if (md1->color[3]<1.f) return md1->mvMatrix[14]>md0->mvMatrix[14]?-1:1;
         else return 1;
     }
     else if (md1->color[3]<1.f) return -1;
+    else return md1->mvMatrix[14]<md0->mvMatrix[14]?-1:1;   // optional new line: opaque object sorted front to back
     return 0;
 }
 
@@ -1980,7 +2546,10 @@ void Teapot_MeshData_Clear(Teapot_MeshData* md) {
     md->colorAmbient[0]=md->colorAmbient[1]=md->colorAmbient[2]=0.25f;
     md->colorSpecular[0]=md->colorSpecular[1]=md->colorSpecular[2]=0.8f;md->colorSpecular[3]=20.f;
     md->scaling[0]=md->scaling[1]=md->scaling[2]=1.f;
-    md->outlineEnabled = 0;md->userPtr=0;
+    md->outlineEnabled = 0;md->active=1;
+#   ifndef TEAPOT_MESHDATA_STRUCT_EXTRA_FIELDS
+    md->userPtr=0;
+#   endif
 }
 #ifdef __cplusplus
 _Teapot_MeshData::_Teapot_MeshData() {Teapot_MeshData_Clear(this);}
@@ -1992,14 +2561,26 @@ void Teapot_MeshData_SetMMatrix(Teapot_MeshData* md, const tpoat* mMatrix16) {Te
 void Teapot_MeshData_CalculateMvMatrix(Teapot_MeshData* md) {Teapot_Helper_MultMatrixUncheckArgs(md->mvMatrix,TIS.vMatrix,md->mMatrix);}
 
 #ifndef TEAPOT_USE_OPENMP
-void Teapot_MeshData_CalculateMvMatrixFromArray(Teapot_MeshData** meshes,int numMeshes) {int i;if (!meshes || numMeshes<=0) return;for (i=0;i<numMeshes;i++) Teapot_MeshData_CalculateMvMatrix(meshes[i]);}
+void Teapot_MeshData_CalculateMvMatrixFromArray(Teapot_MeshData** meshes,int numMeshes) {
+    int i;if (!meshes || numMeshes<=0) return;
+    for (i=0;i<numMeshes;i++) {
+        Teapot_MeshData* md = meshes[i];
+#       ifdef TEAPOT_CALCULATEMVMATRIXFROMARRAY_EXCLUDES_INACTIVE_MESHDATA
+        if (md->active) // optional
+#       endif
+            Teapot_Helper_MultMatrixUncheckArgs(md->mvMatrix,TIS.vMatrix,md->mMatrix);
+    }
+}
 #else //TEAPOT_USE_OPENMP
 void Teapot_MeshData_CalculateMvMatrixFromArray(Teapot_MeshData** meshes,int numMeshes) {
     int i;if (!meshes || numMeshes<=0) return;
 #   pragma omp parallel
     for (i=0;i<numMeshes;i++) {
         Teapot_MeshData* md = meshes[i];
-        Teapot_Helper_MultMatrix(md->mvMatrix,TIS.vMatrix,md->mMatrix);
+#       ifdef TEAPOT_CALCULATEMVMATRIXFROMARRAY_EXCLUDES_INACTIVE_MESHDATA
+        if (md->active) // optional
+#       endif
+            Teapot_Helper_MultMatrixUncheckArgs(md->mvMatrix,TIS.vMatrix,md->mMatrix);
     }
 }
 #endif //TEAPOT_USE_OPENMP
@@ -2010,34 +2591,84 @@ void Teapot_DrawMulti(Teapot_MeshData** meshes,int numMeshes,int mustSortObjects
 }
 void Teapot_DrawMulti_Mv(Teapot_MeshData* const* meshes,int numMeshes,int mustSortObjectsForTransparency)  {
     if (!meshes || numMeshes<=0) return;
-    if (mustSortObjectsForTransparency) qsort((void*)meshes,numMeshes,sizeof(Teapot_MeshData*),_Teapot_MeshData_Comparer);
+    if (mustSortObjectsForTransparency) qsort((void*)meshes,numMeshes,sizeof(Teapot_MeshData*),Teapot_MeshData_Depth_Sorter);
     {
         const int pushMeshOutlineEnabled = TIS.meshOutlineEnabled;
         int i,startTransparentObjects=mustSortObjectsForTransparency?0:-1;
         for (i=0;i<numMeshes;i++) {
             const Teapot_MeshData* md = meshes[i];
-            TIS.meshOutlineEnabled = md->outlineEnabled;
-            if (!TIS.colorMaterialEnabled)  {
-                Teapot_SetColorAmbient(md->colorAmbient[0],md->colorAmbient[1],md->colorAmbient[2]);
+            if (md->active) {
+                TIS.meshOutlineEnabled = md->outlineEnabled;
+                if (!TIS.colorMaterialEnabled)  {
 #               ifdef TEAPOT_SHADER_SPECULAR
-                Teapot_SetColorSpecular(md->colorSpecular[0],md->colorSpecular[1],md->colorSpecular[2],md->colorSpecular[3]);
+                    Teapot_SetColorAmbientDiffuseAndSpecular(md->colorAmbient,md->color,md->colorSpecular);
+#               else //TEAPOT_SHADER_SPECULAR
+                    Teapot_SetColorAmbientAndDiffuse(md->colorAmbient,md->color);
 #               endif //TEAPOT_SHADER_SPECULAR
+                }
+                else Teapot_SetColor(md->color[0],md->color[1],md->color[2],md->color[3]);
+                Teapot_SetScaling(md->scaling[0]==0?1:md->scaling[0],md->scaling[1]==0?1:md->scaling[1],md->scaling[2]==0?1:md->scaling[2]);
+                if (md->color[3]<1.f && startTransparentObjects==0) {
+                    startTransparentObjects=1;
+                    glDepthMask(GL_FALSE);
+                    glEnable(GL_BLEND);
+                }
+                if (md->color[3]!=0) Teapot_Draw_Mv(md->mvMatrix,md->meshId);
             }
-            Teapot_SetColor(md->color[0],md->color[1],md->color[2],md->color[3]);
-            Teapot_SetScaling(md->scaling[0]==0?1:md->scaling[0],md->scaling[1]==0?1:md->scaling[1],md->scaling[2]==0?1:md->scaling[2]);
-            if (md->color[3]<1.f && startTransparentObjects==0) {
-                startTransparentObjects=1;
-                glEnable(GL_BLEND);
-            }
-            if (md->color[3]!=0) Teapot_Draw_Mv(md->mvMatrix,md->meshId);
         }
         if (startTransparentObjects==1) {
             glDisable(GL_BLEND);
+            glDepthMask(GL_TRUE);
         }
         TIS.meshOutlineEnabled = pushMeshOutlineEnabled;
     }
 }
 
+static __inline void Teapot_Private_DrawArmatureBone(const tpoat mMatrix16[16],tpoat length,void (*DrawCallback)(const tpoat mMatrix[16],TeapotMeshEnum meshId))   {
+    // Draws armature bone (in y direction with tail in mMatrix16)
+    const tpoat bwidth = length*0.2, bsphere0 = length*0.1, bsphere1 = length*0.05;
+    tpoat mMatrix[16];Teapot_Helper_CopyMatrix(mMatrix,mMatrix16);
+
+#   ifndef TEAPOT_CENTER_MESHES_ON_FLOOR
+    Teapot_Helper_TranslateMatrix(mMatrix,0,length,0);
+    Teapot_SetScaling(bsphere1,bsphere1,bsphere1);
+    DrawCallback(mMatrix,TEAPOT_MESH_SPHERE1);
+
+    Teapot_Helper_TranslateMatrix(mMatrix,0,-length,0);
+    Teapot_SetScaling(bsphere0,bsphere0,bsphere0);
+    DrawCallback(mMatrix,TEAPOT_MESH_SPHERE1);
+
+    Teapot_Helper_TranslateMatrix(mMatrix,0,length*0.25*0.5,0);
+    Teapot_Helper_RotateMatrix(mMatrix,180,1,0,0);
+    Teapot_SetScaling(bwidth,0.25*length,bwidth);
+    DrawCallback(mMatrix,TEAPOT_MESH_PYRAMID);
+    Teapot_Helper_RotateMatrix(mMatrix,-180,1,0,0);
+    Teapot_Helper_TranslateMatrix(mMatrix,0,length*0.5,0);
+    Teapot_SetScaling(bwidth,0.75*length,bwidth);
+    DrawCallback(mMatrix,TEAPOT_MESH_PYRAMID);
+#   else
+    Teapot_Helper_TranslateMatrix(mMatrix,0,length-bsphere1*0.5,0);
+    Teapot_SetScaling(bsphere1,bsphere1,bsphere1);
+    DrawCallback(mMatrix,TEAPOT_MESH_SPHERE1);
+
+    Teapot_Helper_TranslateMatrix(mMatrix,0,-length+(bsphere1-bsphere0)*0.5,0);
+    Teapot_SetScaling(bsphere0,bsphere0,bsphere0);
+    DrawCallback(mMatrix,TEAPOT_MESH_SPHERE1);
+
+    Teapot_Helper_TranslateMatrix(mMatrix,0,bsphere0*0.5+length*0.25,0);
+    Teapot_Helper_RotateMatrix(mMatrix,180,1,0,0);
+    Teapot_SetScaling(bwidth,0.25*length,bwidth);
+    DrawCallback(mMatrix,TEAPOT_MESH_PYRAMID);
+    Teapot_Helper_RotateMatrix(mMatrix,-180,1,0,0);
+    //
+    Teapot_SetScaling(bwidth,0.75*length,bwidth);
+    DrawCallback(mMatrix,TEAPOT_MESH_PYRAMID);
+#   endif
+}
+void Teapot_Helper_DrawArmatureBone(const tpoat mMatrix[16],tpoat length)   {Teapot_Private_DrawArmatureBone(mMatrix,length,&Teapot_Draw);}
+void Teapot_Helper_DrawArmatureBone_Mv(const tpoat mvMatrix[16],tpoat length)   {Teapot_Private_DrawArmatureBone(mvMatrix,length,&Teapot_Draw_Mv);}
+
+void Teapot_MeshData_DrawAabb(const Teapot_MeshData* mesh)  {if (mesh)   Teapot_DrawAabb(mesh->mMatrix,mesh->meshId,mesh->scaling);}
 
 // Loading shader function
 static __inline GLhandleARB Teapot_LoadShader(const char* buffer, const unsigned int type)
@@ -2091,30 +2722,56 @@ static __inline GLhandleARB Teapot_LoadShader(const char* buffer, const unsigned
 
         // Free the buffer malloced earlier
         free(errorLogText);
+
+        glDeleteShader(handle);handle=0;
     }
 
     return handle;
 }
-
-static __inline GLuint Teapot_LoadShaderProgramFromSource(const char* vs,const char* fs)	{
+static __inline GLuint Teapot_LoadShaderProgramFromSourceExt(const char* sh0,GLenum sh0_type,const char* sh1,GLenum sh1_type,const char* sh2,GLenum sh2_type,const char* sh3,GLenum sh3_type,const char* sh4,GLenum sh4_type)	{
     // shader Compilation variable
+#   define TEAPOTLOADSHADERFROMSOURCEEXT_MAX_NUM_SHADERS (5)
+    const char* shaders[TEAPOTLOADSHADERFROMSOURCEEXT_MAX_NUM_SHADERS] = {sh0,sh1,sh2,sh3,sh4};
+    const GLenum shader_types[TEAPOTLOADSHADERFROMSOURCEEXT_MAX_NUM_SHADERS] = {sh0_type,sh1_type,sh2_type,sh3_type,sh4_type};
     GLint result;				// Compilation code result
     GLint errorLoglength ;
     char* errorLogText;
     GLsizei actualErrorLogLength;
 
-    GLhandleARB vertexShaderHandle;
-    GLhandleARB fragmentShaderHandle;
-    GLuint programId = 0;
+    GLhandleARB shaderHandle = 0;
+    GLuint programId = glCreateProgram();
 
-    vertexShaderHandle   = Teapot_LoadShader(vs,GL_VERTEX_SHADER);
-    fragmentShaderHandle = Teapot_LoadShader(fs,GL_FRAGMENT_SHADER);
-    if (!vertexShaderHandle || !fragmentShaderHandle) return 0;
+    unsigned i;
+    if (!programId)    {
+        //We have failed creating the program object.
+        printf("Failed creating program object.\n");
+        exit(0);
+    }
+    for (i=0;i<TEAPOTLOADSHADERFROMSOURCEEXT_MAX_NUM_SHADERS;i++) {
+        const char* sh = shaders[i];
+        const GLenum type = shader_types[i];
+        if (sh && type) {
+            shaderHandle = Teapot_LoadShader(sh,type);
+            if (!shaderHandle) break;
+            glAttachShader(programId,shaderHandle);
+            glDeleteShader(shaderHandle);
+            /*If a shader object to be deleted is attached to a program object, it will be flagged for deletion,
+            but it will not be deleted until it is no longer attached to any program object,
+            for any rendering context (i.e., it must be detached from wherever it was attached before it will be deleted). A value of 0 for shader will be silently ignored.
+            To determine whether an object has been flagged for deletion, call glGetShader with arguments shader and GL_DELETE_STATUS.*/
+        }
+    }
 
-    programId = glCreateProgram();
+    if (i!=TEAPOTLOADSHADERFROMSOURCEEXT_MAX_NUM_SHADERS) {
+        glDeleteProgram(programId);
+        /*If a program object is in use as part of current rendering state, it will be flagged for deletion,
+        but it will not be deleted until it is no longer part of current state for any rendering context.
+        If a program object to be deleted has shader objects attached to it, those shader objects will be automatically detached but not deleted
+        unless they have already been flagged for deletion by a previous call to glDeleteShader. A value of 0 for program will be silently ignored.
+        To determine whether a program object has been flagged for deletion, call glGetProgram with arguments program and GL_DELETE_STATUS.*/
+        return 0;
+    }
 
-    glAttachShader(programId,vertexShaderHandle);
-    glAttachShader(programId,fragmentShaderHandle);
     glLinkProgram(programId);
 
     //Link checking.
@@ -2140,13 +2797,16 @@ static __inline GLuint Teapot_LoadShaderProgramFromSource(const char* vs,const c
 
         // Free the buffer malloced earlier
         free(errorLogText);
+
+        glDeleteProgram(programId);programId=0;
     }
 
-    glDeleteShader(vertexShaderHandle);
-    glDeleteShader(fragmentShaderHandle);
-
     return programId;
+#   undef TEAPOTLOADSHADERFROMSOURCEEXT_MAX_NUM_SHADERS
 }
+static __inline GLuint Teapot_LoadShaderProgramFromSource(const char* vs,const char* fs) {return Teapot_LoadShaderProgramFromSourceExt(vs,GL_VERTEX_SHADER,fs,GL_FRAGMENT_SHADER,NULL,0,NULL,0,NULL,0);}
+
+
 
 // numVerts is the number of vertices (= number of 3 floats)
 // numInds is the number of triangle indices (= 3 * num triangles)
@@ -2335,6 +2995,17 @@ void Teapot_GetMeshAabbMinAndMax(TeapotMeshEnum meshId,float aabbMin[3],float aa
     aabbMin[0] = TIS.aabbMin[meshId][0];aabbMin[1] = TIS.aabbMin[meshId][1];aabbMin[2] = TIS.aabbMin[meshId][2];
     aabbMax[0] = TIS.aabbMax[meshId][0];aabbMax[1] = TIS.aabbMax[meshId][1];aabbMax[2] = TIS.aabbMax[meshId][2];
 }
+void Teapot_GetMeshScaledAabbHalfExtents(TeapotMeshEnum meshId,float halfAabb[3],const float scaling[3]) {
+    halfAabb[0] = TIS.halfExtents[meshId][0]*scaling[0];halfAabb[1] = TIS.halfExtents[meshId][1]*scaling[1];halfAabb[2] = TIS.halfExtents[meshId][2]*scaling[2];
+}
+void Teapot_GetMeshScaledAabbExtents(TeapotMeshEnum meshId,float aabb[3],const float scaling[3]) {
+    aabb[0] = TIS.halfExtents[meshId][0]*2*scaling[0];aabb[1] = TIS.halfExtents[meshId][1]*2*scaling[1];aabb[2] = TIS.halfExtents[meshId][2]*2*scaling[2];
+}
+
+void Teapot_MeshData_GetAabbCenter(const Teapot_MeshData* md,float* center)   {Teapot_GetMeshAabbCenter(md->meshId,center);center[0]*=md->scaling[0];center[1]*=md->scaling[1];center[2]*=md->scaling[2];}
+void Teapot_MeshData_GetAabbHalfExtents(const Teapot_MeshData* md,float* halfAabb)  {Teapot_GetMeshScaledAabbHalfExtents(md->meshId,halfAabb,md->scaling);}
+void Teapot_MeshData_GetAabbExtents(const Teapot_MeshData* md,float* aabb)  {Teapot_GetMeshScaledAabbExtents(md->meshId,aabb,md->scaling);}
+
 
 void Teapot_Set_Init_Callback(TeapotInitCallback callback)  {gTeapotInitCallback = callback;}
 
@@ -2342,17 +3013,17 @@ void Teapot_Set_Init_UserMeshCallback(TeapotInitUserMeshCallback callback) {gTea
 
 #if (defined(DYNAMIC_RESOLUTION_H) && defined(TEAPOT_SHADER_USE_SHADOW_MAP))
 #if ((defined(DYNAMIC_RESOLUTION_USE_DOUBLE_PRECISION) && defined(TEAPOT_USE_DOUBLE_PRECISION)) || (!defined(DYNAMIC_RESOLUTION_USE_DOUBLE_PRECISION) && !defined(TEAPOT_USE_DOUBLE_PRECISION)))
-static void Teapot_MeshData_HiLevel_DrawMulti_ShadowMap_Vp_Internal(Teapot_MeshData* const* pMeshData,int numMeshData,const tpoat* lvpMatrix16,const tpoat lvpMatrixFrustumPlaneEquations[6][4],float transparent_threshold, int use_frustum_culling)
+static void Teapot_MeshData_HiLevel_DrawMulti_ShadowMap_Vp_Internal(Teapot_MeshData* const* pMeshData,int numMeshData,const tpoat* lvpMatrix16,const tpoat lvpMatrixFrustumPlaneEquations[6][4],float transparent_threshold, int use_frustum_culling, void (*optionalAdditionalObjectsCallback)(void* userData),void* userData)
 {
     int i;
     Dynamic_Resolution_Bind_Shadow();   // Binds the shadow map FBO and its shader program
     glClear(GL_DEPTH_BUFFER_BIT);
     Dynamic_Resolution_Shadow_Set_VpMatrix(lvpMatrix16);  // lvpMatrix16 is good if we can use mMatrix below. If we MUST use mvMatrix below, here we must pass (lvpMatrix * cameraViewMatrixInverse). Please see Dynamic_Resolution_MultMatrix(...) and Teapot_GetViewMatrixInverse(...) methods.
-    Teapot_LowLevel_BindVertexBufferObject();
+    Teapot_LowLevel_BindVertexBufferObjectAndEnableVertexAttributes(1,1);
     for (i=0;i<numMeshData;i++) {
         const Teapot_MeshData* md = pMeshData[i];
         TeapotMeshEnum meshId = md->meshId;
-        if (md->color[3]>=transparent_threshold && meshId<TEAPOT_MESH_PIVOT3D)
+        if (md->active && md->color[3]>=transparent_threshold && meshId<TEAPOT_MESH_PIVOT3D)
         {
             if (use_frustum_culling) {
             // We could enable frustum culling here too...
@@ -2363,13 +3034,13 @@ static void Teapot_MeshData_HiLevel_DrawMulti_ShadowMap_Vp_Internal(Teapot_MeshD
 
                 if (meshId<TEAPOT_MESH_TEXT_X || meshId>TEAPOT_MESH_TEXT_Z) {
                     const float* scaling = md->scaling;
-                    const tpoat aabbMin[3] = {TIS.aabbMin[meshId][0]*scaling[0],TIS.aabbMin[meshId][1]*scaling[1],TIS.aabbMin[meshId][2]*scaling[2]};
-                    const tpoat aabbMax[3] = {TIS.aabbMax[meshId][0]*scaling[0],TIS.aabbMax[meshId][1]*scaling[1],TIS.aabbMax[meshId][2]*scaling[2]};
+                    const tpoat aabbCenter[3] = {TIS.centerPoint[meshId][0]*scaling[0],TIS.centerPoint[meshId][1]*scaling[1],TIS.centerPoint[meshId][2]*scaling[2]};
+                    const tpoat aabbHalfExtents[3] = {TIS.halfExtents[meshId][0]*scaling[0],TIS.halfExtents[meshId][1]*scaling[1],TIS.halfExtents[meshId][2]*scaling[2]};
 
                     if (!Teapot_Helper_IsVisible(lvpMatrixFrustumPlaneEquations,
                                                  md->mMatrix,
-                                                 aabbMin[0],aabbMin[1],aabbMin[2],
-                                                 aabbMax[0],aabbMax[1],aabbMax[2]))
+                                                 aabbCenter,
+                                                 aabbHalfExtents))
                     {
                         //fprintf(stderr,"MeshId=%d\n",meshId);
                         continue;
@@ -2426,6 +3097,9 @@ static void Teapot_MeshData_HiLevel_DrawMulti_ShadowMap_Vp_Internal(Teapot_MeshD
             if (meshId==TEAPOT_MESH_SPHERE2)    meshId=TEAPOT_MESH_SPHERE1;
             else if (meshId==TEAPOT_MESH_CONE2) meshId=TEAPOT_MESH_CONE1;
             else if (meshId==TEAPOT_MESH_CUBIC_GROUND)  meshId=TEAPOT_MESH_CUBE;
+#           ifdef TEAPOT_USE_SIMPLER_CUBE_ROUNDED_SHADOW
+            else if (meshId==TEAPOT_MESH_CUBE_ROUNDED)    meshId=TEAPOT_MESH_CUBE;
+#           endif
             // End (Opt)
 
             Dynamic_Resolution_Shadow_Set_MMatrix(md->mMatrix); // mMatrix here (or mvMatrix if we had called above Dynamic_Resolution_Shadow_Set_VpMatrix(lvpMatrix * cameraViewMatrixInverse);)
@@ -2433,7 +3107,10 @@ static void Teapot_MeshData_HiLevel_DrawMulti_ShadowMap_Vp_Internal(Teapot_MeshD
             Teapot_LowLevel_DrawElements(meshId);
         }
     }
-    Teapot_LowLevel_UnbindVertexBufferObject();
+    Teapot_LowLevel_UnbindVertexBufferObjectAndDisableVertexAttributes(1,1);
+    if (optionalAdditionalObjectsCallback) {
+        optionalAdditionalObjectsCallback(userData);
+    }
     Dynamic_Resolution_Unbind_Shadow();   // Unbinds the shadow map FBO and its shader program
 
     Teapot_SetShadowVpMatrix(lvpMatrix16);    // Needed for the second shadowing pass (enabled with the definition: TEAPOT_SHADER_USE_SHADOW_MAP). Note that here we can't pass (lvpMatrix * cameraViewMatrixInverse), but just lvpMatrix (because the multiplication happens internally).
@@ -2441,12 +3118,12 @@ static void Teapot_MeshData_HiLevel_DrawMulti_ShadowMap_Vp_Internal(Teapot_MeshD
     Teapot_SetShadowMapTexelIncrement(Dynamic_Resolution_GetShadowMapTexelIncrement(),Dynamic_Resolution_GetShadowMapTexelIncrement());
     glBindTexture(GL_TEXTURE_2D,Dynamic_Resolution_Get_Shadow_Texture_ID());
 }
-void Teapot_HiLevel_DrawMulti_ShadowMap_Vp(Teapot_MeshData* const* pMeshData,int numMeshData,const tpoat* lvpMatrix16, float transparent_threshold)  {
+void Teapot_HiLevel_DrawMulti_ShadowMap_Vp(Teapot_MeshData* const* pMeshData,int numMeshData,const tpoat* lvpMatrix16, float transparent_threshold, void (*optionalAdditionalObjectsCallback)(void* userData),void* userData)  {
     static tpoat dummy[6][4];
-    Teapot_MeshData_HiLevel_DrawMulti_ShadowMap_Vp_Internal(pMeshData,numMeshData,lvpMatrix16,dummy,transparent_threshold,0);
+    Teapot_MeshData_HiLevel_DrawMulti_ShadowMap_Vp_Internal(pMeshData,numMeshData,lvpMatrix16,dummy,transparent_threshold,0,optionalAdditionalObjectsCallback,userData);
 }
-void Teapot_HiLevel_DrawMulti_ShadowMap_Vp_WithFrustumCulling(Teapot_MeshData* const* pMeshData,int numMeshData,const tpoat* lvpMatrix16,const tpoat lvpMatrixFrustumPlaneEquations[6][4], float transparent_threshold) {
-    Teapot_MeshData_HiLevel_DrawMulti_ShadowMap_Vp_Internal(pMeshData,numMeshData,lvpMatrix16,lvpMatrixFrustumPlaneEquations,transparent_threshold,1);
+void Teapot_HiLevel_DrawMulti_ShadowMap_Vp_WithFrustumCulling(Teapot_MeshData* const* pMeshData,int numMeshData,const tpoat* lvpMatrix16,const tpoat lvpMatrixFrustumPlaneEquations[6][4], float transparent_threshold, void (*optionalAdditionalObjectsCallback)(void* userData),void* userData) {
+    Teapot_MeshData_HiLevel_DrawMulti_ShadowMap_Vp_Internal(pMeshData,numMeshData,lvpMatrix16,lvpMatrixFrustumPlaneEquations,transparent_threshold,1,optionalAdditionalObjectsCallback,userData);
 }
 #endif
 #endif
@@ -2472,12 +3149,12 @@ void Teapot_Init(void) {
     TIS.aLoc_normal = glGetAttribLocation(TIS.programId, "a_normal");
     TIS.uLoc_mvMatrix = glGetUniformLocation(TIS.programId,"u_mvMatrix");
     TIS.uLoc_pMatrix = glGetUniformLocation(TIS.programId,"u_pMatrix");
-    TIS.uLoc_nMatrix = glGetUniformLocation(TIS.programId,"u_nMatrix");
+    TIS.uLoc_nCoefficients = glGetUniformLocation(TIS.programId,"u_nCoefficients");
     TIS.uLoc_scaling = glGetUniformLocation(TIS.programId,"u_scaling");
     TIS.uLoc_lightVector = glGetUniformLocation(TIS.programId,"u_lightVector");
-    TIS.uLoc_color = glGetUniformLocation(TIS.programId,"u_color");
-    TIS.uLoc_colorAmbient = glGetUniformLocation(TIS.programId,"u_colorAmbient");
-    TIS.uLoc_colorSpecular = glGetUniformLocation(TIS.programId,"u_colorSpecular");
+    TIS.uLoc_color = glGetUniformLocation(TIS.programId,"u_colorData[0]");
+    TIS.uLoc_colorAmbient = glGetUniformLocation(TIS.programId,"u_colorData[1]");
+    TIS.uLoc_colorSpecular = glGetUniformLocation(TIS.programId,"u_colorData[2]");
     TIS.uLoc_fogColor = glGetUniformLocation(TIS.programId,"u_fogColor");
     TIS.uLoc_fogDistances = glGetUniformLocation(TIS.programId,"u_fogDistances");
     TIS.uLoc_biasedShadowMvpMatrix = glGetUniformLocation(TIS.programId,"u_biasedShadowMvpMatrix");
@@ -2494,7 +3171,7 @@ void Teapot_Init(void) {
     //else printf("TIS.aLoc_normal = %d\n",TIS.aLoc_normal);
     if (TIS.uLoc_mvMatrix<0) printf("Error: TIS.uLoc_mvMatrix not found\n");
     if (TIS.uLoc_pMatrix<0) printf("Error: TIS.uLoc_pMatrix not found\n");
-    if (TIS.uLoc_nMatrix<0) printf("Error: TIS.uLoc_nMatrix not found\n");
+    if (TIS.uLoc_nCoefficients<0) printf("Error: TIS.uLoc_nCoefficients not found\n");
     if (TIS.uLoc_scaling<0) printf("Error: TIS.uLoc_scaling not found\n");
     if (TIS.uLoc_lightVector<0) printf("Error: TIS.uLoc_lightVector not found\n");
     if (TIS.uLoc_color<0) printf("Error: TIS.uLoc_color not found\n");
@@ -2536,13 +3213,13 @@ void Teapot_Init(void) {
 #       endif //TEAPOT_SHADER_SPECULAR
         glUseProgram(0);
     }
-
+   
     {        
 #       ifndef TEAPOT_MAX_NUM_MESH_VERTS
-#           define TEAPOT_MAX_NUM_MESH_VERTS  (2796)
+#           define TEAPOT_MAX_NUM_MESH_VERTS  (3400)
 #       endif //TEAPOT_MAX_NUM_MESH_VERTS
 #       ifndef TEAPOT_MAX_NUM_MESH_INDS
-#           define TEAPOT_MAX_NUM_MESH_INDS   (14148)
+#           define TEAPOT_MAX_NUM_MESH_INDS   (16420)
 #       endif //TEAPOT_MAX_NUM_MESH_INDS
 
 #       ifndef TEAPOT_MAX_NUM_USER_MESH_VERTICES
@@ -2916,6 +3593,103 @@ void Teapot_Init(void) {
 #               endif
             }
                 break;
+            case TEAPOT_MESH_FLIPPER_RIGHT:
+            case TEAPOT_MESH_FLIPPER_LEFT:  {
+#               if !defined(TEAPOT_NO_MESH_FLIPPER_RIGHT) && !defined(TEAPOT_NO_MESH_FLIPPER_LEFT)
+                {
+                    // numVerts: 160;	numInds: 564 (188 triangles);                                                           TEAPOT_MESH_FLIPPER_LEFT:
+                    // centerPoint: {-1.250437,0.010211,0.000000};	halfExtents: {1.750000,0.500000,0.500000};                -0.5 0 0.5 1.25  2.6 2.8 3.0   TEAPOT_CENTER_MESH_FLIPPERS not defined
+                    // origin: {0,0,0} is at the pivot point, at the center of the bigger cylinder (of radius 0.5)              |--o--|----|------|-o-|    -----> x axis
+                    // The smaller cylinder at the flipper tip has radius = 0.2                                                  -1.25     0       1.55      TEAPOT_CENTER_MESH_FLIPPERS defined
+                    // Total extent in the X axis is 3.5
+                    // ... so that the distance between the two centers should be... 3.5-0.5-0.2 = 2.8
+                    //
+                    // When TEAPOT_CENTER_MESH_FLIPPERS is defined we can split TEAPOT_MESH_FLIPPER_RIGHT into 3 shapes:
+                    // 1) Big cylinder:   C(1.25f,0.f,0.f); R=0.5f;
+                    // 2) Small Cylinder: c(-1.55f,0.f,0.f); r=0.2f;
+                    // 3) A convex hull with 8 verices: (never tested)
+                    //    const float s[3] = {-1.554f,0.5f,0.196f};
+                    //    const float b[3] = {1.25f,0.5f,0.5f};;
+                    //    const float ch_verts[8*3]={b[0],b[1],b[2],b[0],-b[1],b[2],b[0],b[1],-b[2],b[0],-b[1],-b[2],
+                    //    s[0],s[1],s[2],s[0],-s[1],s[2],s[0],s[1],-s[2],s[0],-s[1],-s[2]};
+                    //
+                    const float A=0.510211,B=0.489789,C=0.000000,D=0.500000,E=0.097460,F=0.490393,G=0.191174,H=0.461940,I=0.277542,J=0.415735,K=0.353244,L=0.353553,M=0.415371,N=0.277785,O=0.461536,P=0.191342,Q=0.489964,R=0.097545,S=2.839596,T=0.196157,U=2.877082,V=0.184776,W=2.911629,X=0.166294,Y=2.941910,Z=2.966761,a=0.111114,b=2.996598,c=0.039018,d=0.499563,e=0.141421,f=2.985227;
+                    const float g=0.076536,h=3.000437,k=2.985226,l=0.076537,m=0.141422;
+                    float verts[160*3] = {
+                        -C,-B,-D,E,-B,-F,G,-B,-H,I,-B,-J,K,-B,-L,M,-B,-N,O,-B,-P,Q,-B,-R,d,-B,-C,Q,-B,R,O,-B,P,M,-B,N,K,-B,L,I,-B,J,G,-B,H,E,-B,F,-C,-B,D,-S,-B,T,-U,-B,V,-W,-B,X,-Y,-B,e,-Z,-B,a,-f,-B,g,-b,-B,c,-h,-B,-C,-b,-B,-c,-k,-B,-l,-Z,-B,-a,-Y,-B,-m,-W,-B,-X,-U,-B,-V,-S,-B,-T,
+                        E,A,-F,-C,A,-D,G,A,-H,I,A,-J,K,A,-L,M,A,-N,O,A,-P,Q,A,-R,d,A,-C,Q,A,R,O,A,P,M,A,N,K,A,L,I,A,J,G,A,H,E,A,F,-C,A,D,-S,A,T,-U,A,V,-W,A,X,-Y,A,e,-Z,A,a,-f,A,g,-b,A,c,-h,A,-C,-b,A,-c,-k,A,-l,-Z,A,-a,-Y,A,-m,-W,A,-X,-U,A,-V,-S,A,-T,
+                        -C,-B,-D,0.000642,A,-0.345718,E,-B,-F,0.067400,A,-0.339137,G,-B,-H,0.132209,A,-0.319460,I,-B,-J,0.191938,A,-0.287506,K,-B,-L,0.244290,A,-0.244504,M,-B,-N,0.287255,A,-0.192106,O,-B,-P,0.319181,A,-0.132325,Q,-B,-R,0.338840,A,-0.067459,d,-B,-C,0.345479,A,-C,Q,-B,R,0.338840,A,0.067458,O,-B,P,0.319181,A,0.132325,M,-B,N,0.287255,A,0.192106,K,-B,L,0.244290,A,0.244504,I,-B,J,0.191938,A,0.287506,G,-B,H,0.132209,A,0.319460,E,-B,F,0.067399,A,0.339137,
+                        -C,-B,D,0.000642,A,0.345718,-S,-B,T,-2.808919,A,0.045088,-U,-B,V,-2.818116,A,0.042296,-W,-B,X,-2.826025,A,0.038065,-Y,-B,e,-2.832956,A,0.032372,-Z,-B,a,-2.838645,A,0.025434,-f,-B,g,-2.842871,A,0.017520,-b,-B,c,-2.845474,A,0.008931,-h,-B,-C,-2.846353,A,-C,-b,-B,-c,-2.845474,A,-0.008932,-k,-B,-l,-2.842871,A,-0.017520,-Z,-B,-a,-2.838644,A,-0.025435,-Y,-B,-m,-2.832956,A,-0.032372,-W,-B,-X,-2.826025,A,-0.038066,-U,-B,-V,-2.818116,A,-0.042296,-S,-B,-T,-2.808919,A,-0.045089,
+                        E,A,-F,-C,A,-D,G,A,-H,I,A,-J,K,A,-L,M,A,-N,O,A,-P,Q,A,-R,d,A,-C,Q,A,R,O,A,P,M,A,N,K,A,L,I,A,J,G,A,H,E,A,F,-C,A,D,-S,A,T,-U,A,V,-W,A,X,-Y,A,e,-Z,A,a,-f,A,g,-b,A,c,-h,A,-C,-b,A,-c,-k,A,-l,-Z,A,-a,-Y,A,-m,-W,A,-X,-U,A,-V,-S,A,-T};
+                    const size_t numVerts = sizeof(verts)/(sizeof(verts[0])*3);
+                    const unsigned short inds[564] = {	// 188 triangles
+                        65,128,129,67,130,128,69,131,130,71,132,131,73,133,132,75,134,133,77,135,134,79,136,135,83,136,81,85,137,83,87,138,85,89,139,87,91,140,89,93,141,91,95,142,93,97,143,95,97,145,144,101,145,99,101,147,146,103,148,147,105,149,148,107,
+                        150,149,109,151,150,111,152,151,115,152,113,117,153,115,119,154,117,121,155,119,123,156,121,125,157,123,125,159,158,65,159,127,65,67,128,67,69,130,69,71,131,71,73,132,73,75,133,75,77,134,77,79,135,79,81,136,83,137,136,85,138,137,87,139,
+                        138,89,140,139,91,141,140,93,142,141,95,143,142,97,144,143,97,99,145,101,146,145,101,103,147,103,105,148,105,107,149,107,109,150,109,111,151,111,113,152,115,153,152,117,154,153,119,155,154,121,156,155,123,157,156,125,158,157,125,127,159,65,129,159,
+                        33,1,0,32,2,1,34,3,2,35,4,3,36,5,4,37,6,5,38,7,6,39,8,7,40,9,8,41,10,9,42,11,10,43,12,11,44,13,12,45,14,13,46,15,14,47,16,15,48,17,16,49,18,17,50,19,18,51,20,19,52,21,20,53,
+                        22,21,54,23,22,55,24,23,56,25,24,57,26,25,58,27,26,59,28,27,60,29,28,61,30,29,62,31,30,63,0,31,33,32,1,32,34,2,34,35,3,35,36,4,36,37,5,37,38,6,38,39,7,39,40,8,40,41,9,41,42,10,42,43,
+                        11,43,44,12,44,45,13,45,46,14,46,47,15,47,48,16,48,49,17,49,50,18,50,51,19,51,52,20,52,53,21,53,54,22,54,55,23,55,56,24,56,57,25,57,58,26,58,59,27,59,60,28,60,61,29,61,62,30,62,63,31,63,33,0,
+                        126,98,110,126,64,96,64,66,70,64,80,96,66,68,70,70,72,64,72,74,64,74,76,64,76,78,64,78,80,64,80,82,96,82,84,96,84,86,96,86,88,96,88,90,96,90,92,94,94,96,90,96,98,126,98,100,102,102,104,106,106,108,98,108,
+                        110,98,110,112,126,112,114,126,114,116,126,116,118,126,118,120,126,120,122,126,122,124,126,98,102,106,125,117,101,69,67,65,65,127,99,127,125,101,125,123,121,121,119,125,119,117,125,117,115,113,113,111,109,109,107,101,107,105,101,105,103,101,101,99,
+                        127,99,97,65,97,95,93,93,91,97,91,89,97,89,87,97,87,85,97,85,83,97,83,81,97,81,79,65,79,77,65,77,75,65,75,73,65,73,71,65,71,69,65,117,113,101,113,109,101,97,81,65};
+                    const size_t numInds = sizeof(inds)/sizeof(inds[0]);
+#                   ifdef TEAPOT_CENTER_MESH_FLIPPERS
+                    const float center_point[3] = {-1.250437,0.010211,0.000000};int index;
+                    for (index=0;index<160*3;index+=3)  {verts[index]-=center_point[0];verts[index+1]-=center_point[1];verts[index+2]-=center_point[2];}
+                    /* // to remove---------------------------
+                    const float centers[2][3] = {{-1.55f,0.f,0.f},{1.25f,0.f,0.f}};
+                    const float radii[2]= {0.2f,0.5f};
+                    float valueX[2] = {-1.75f,1.75f};
+                    float valueZ[2] = {0.f,0.f};
+                    const float eps[2] = {radii[0]*0.1f,radii[1]*0.1f};
+                    for (index=0;index<160*3;index+=3)  {
+                        const float v[3] = {verts[index],verts[index+1],verts[index+2]};
+                        if (v[2]>0) {
+                            for (int j=0;j<2;j++)   {
+                                const float d[2] = {v[0]-centers[j][0],v[2]-centers[j][2]};
+                                const float dist = sqrtf(d[0]*d[0]+d[1]*d[1]);
+                                const float cmp = fabsf(dist-radii[j]);
+                                if (cmp<eps[j]) {
+                                    if (j==0) {
+                                        if (v[0]<=-1.5f)
+                                        {
+                                            fprintf(stderr,"{valueX[0]:%1.4f,dist:%1.4f,cmp:%1.4f};\n",v[0],dist,cmp);
+
+                                            if (v[0]>valueX[0]) {valueX[0]=v[0];valueZ[0]=v[2];}
+                                        }
+                                    }
+                                    else {
+                                         if (v[0]>=0.75f && v[0]<=1.25f)    {
+                                            fprintf(stderr,"{valueX[1]:%1.4f,dist:%1.4f,cmp:%1.4f};\n",v[0],dist,cmp);
+
+                                            if (v[0]<valueX[1]) {valueX[1]=v[0];valueZ[1]=v[2];}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    fprintf(stderr,"{%1.4f,%1.4f};{%1.4f,%1.4f};\n",valueX[0],valueZ[0],valueX[1],valueZ[1]);   // {-1.5585,0.0451};{1.5377,0.1921};*/
+                    // ------------------------------------
+#                   endif
+                    // materials:
+                    // 0) Rubber {0.64f,0.05f,0.05f}: first 128 triangles == 384 inds [0,384);
+                    // 1) White: {0.65f,0.65f,0.65f}: last 60 triangles == 180 inds [384,564);
+#                   ifndef TEAPOT_MESH_FLIPPER_RIGHT
+                    if (i==TEAPOT_MESH_FLIPPER_RIGHT) AddMeshVertsAndInds(totVerts,TEAPOT_MAX_NUM_MESH_VERTS,&numTotVerts,6,totInds,TEAPOT_MAX_NUM_MESH_INDS,&numTotInds,verts,numVerts,inds,numInds,(TeapotMeshEnum)i);
+#                   endif
+#                   ifndef TEAPOT_MESH_FLIPPER_LEFT
+                    if (i==TEAPOT_MESH_FLIPPER_LEFT) {
+                        float vertsMirror[160*3];unsigned short indsMirror[564];size_t idx,idx3;
+                        for (idx=0;idx<numVerts;idx++) {idx3=3*idx;vertsMirror[idx3]=-verts[idx3];vertsMirror[idx3+1]=verts[idx3+1];vertsMirror[idx3+2]=verts[idx3+2];}
+                        for (idx=0;idx<numInds;idx+=3) {indsMirror[idx]=inds[idx];indsMirror[idx+1]=inds[idx+2];indsMirror[idx+2]=inds[idx+1];}
+                        AddMeshVertsAndInds(totVerts,TEAPOT_MAX_NUM_MESH_VERTS,&numTotVerts,6,totInds,TEAPOT_MAX_NUM_MESH_INDS,&numTotInds,vertsMirror,numVerts,indsMirror,numInds,(TeapotMeshEnum)i);
+                    }
+#                   endif
+                }
+#               endif
+            }
+                break;
             case TEAPOT_MESH_SLEDGE: {
 #               ifndef TEAPOT_NO_MESH_SLEDGE
                 {
@@ -3053,6 +3827,41 @@ void Teapot_Init(void) {
 #               endif
             }
                 break;
+            case TEAPOT_MESH_CUBE_ROUNDED: {
+#               ifndef TEAPOT_NO_MESH_CUBE_ROUNDED
+                {
+                    // numVerts: 152;	numInds: 900 (300 triangles);
+                    // centerPoint: {0.000000,0.000000,0.000000};	halfExtents: {0.500000,0.500000,0.500000};
+                    const float A=0.375000,B=0.459625,C=0.463388,D=0.417313,E=0.419194,F=0.491927,G=0.447169,H=0.411084,I=0.484746,J=0.500000;
+                    const float verts[152*3] = {
+                        G,-G,-G,H,-B,-B,A,-C,-C,-A,-C,-C,-H,-B,-B,B,-H,-B,D,-D,-I,A,-E,-F,-A,-E,-F,-D,-D,-I,C,-A,-C,C,A,-C,E,-A,-F,E,A,-F,A,A,-J,A,-A,-J,-A,-A,-J,-A,A,-J,-E,-A,-F,-E,A,-F,B,H,-B,D,D,-I,A,E,-F,-A,E,-F,-D,D,-I,-G,-G,-G,-B,-B,-H,-C,-C,-A,-C,-C,A,-B,-B,H,-B,-H,-B,-I,-D,-D,
+                        -F,-E,-A,-F,-E,A,-I,-D,D,-C,-A,-C,-C,A,-C,-F,-A,-E,-F,A,-E,-J,A,-A,-J,-A,-A,-J,-A,A,-J,A,A,-F,-A,E,-F,A,E,-B,H,-B,-I,D,-D,-F,E,-A,-F,E,A,-I,D,D,-G,-G,G,-H,-B,B,-A,-C,C,A,-C,C,H,-B,B,-B,-H,B,-D,-D,I,-A,-E,F,A,-E,F,D,-D,I,-C,-A,C,-C,A,C,-E,-A,F,-E,A,F,
+                        -A,A,J,-A,-A,J,A,-A,J,A,A,J,E,-A,F,E,A,F,-B,H,B,-D,D,I,-A,E,F,A,E,F,D,D,I,G,-G,G,B,-B,H,C,-C,A,C,-C,-A,B,-B,-H,B,-H,B,I,-D,D,F,-E,A,F,-E,-A,I,-D,-D,C,-A,C,C,A,C,F,-A,E,F,A,E,J,A,A,J,-A,A,J,-A,-A,J,A,-A,F,-A,-E,F,A,-E,B,H,B,
+                        I,D,D,F,E,A,F,E,-A,I,D,-D,D,-I,D,A,-F,E,-A,-F,E,-D,-I,D,E,-F,A,E,-F,-A,A,-J,-A,A,-J,A,-A,-J,A,-A,-J,-A,-E,-F,A,-E,-F,-A,D,-I,-D,A,-F,-E,-A,-F,-E,-D,-I,-D,G,G,-G,H,B,-B,A,C,-C,-A,C,-C,-H,B,-B,-G,G,-G,B,B,-H,D,I,-D,A,F,-E,-A,F,-E,-D,I,-D,-B,B,-H,
+                        C,C,-A,C,C,A,E,F,-A,E,F,A,A,J,A,A,J,-A,-A,J,-A,-A,J,A,-E,F,-A,-E,F,A,-C,C,-A,-C,C,A,B,B,H,D,I,D,A,F,E,-A,F,E,-D,I,D,-B,B,H,G,G,G,H,B,B,A,C,C,-A,C,C,-H,B,B,-G,G,G};
+
+                    const unsigned short inds[900] = {	// 300 triangles
+                        0,6,5,1,7,6,3,7,2,4,8,3,25,9,4,5,12,10,6,15,12,8,15,7,9,16,8,30,18,9,12,11,10,15,13,12,16,14,15,18,17,16,35,19,18,13,20,11,14,21,13,17,22,14,17,24,23,19,45,24,21,116,20,22,
+                        117,21,23,118,22,23,120,119,24,121,120,25,31,30,26,32,31,28,32,27,29,33,28,50,34,29,30,37,35,31,40,37,33,40,32,34,41,33,55,43,34,37,36,35,40,38,37,41,39,40,43,42,41,60,44,43,38,45,36,39,46,38,42,47,
+                        39,42,49,48,44,70,49,46,121,45,47,127,46,48,138,47,48,145,139,49,151,145,50,56,55,51,57,56,53,57,52,54,58,53,75,59,54,55,62,60,56,65,62,58,65,57,59,66,58,80,68,59,62,61,60,65,63,62,66,64,65,68,67,66,
+                        85,69,68,63,70,61,64,71,63,67,72,64,67,74,73,69,95,74,71,151,70,72,150,71,73,149,72,73,147,148,74,146,147,75,81,80,76,82,81,78,82,77,79,83,78,0,84,79,80,87,85,81,90,87,83,90,82,84,91,83,5,93,84,87,
+                        86,85,90,88,87,91,89,90,93,92,91,10,94,93,88,95,86,89,96,88,92,97,89,92,99,98,94,20,99,96,146,95,97,140,96,98,129,97,98,122,128,99,116,122,75,100,76,54,101,100,52,101,53,51,102,52,50,103,51,76,104,77,100,107,
+                        104,102,107,101,103,108,102,29,110,103,104,78,77,107,105,104,108,106,107,110,109,108,28,111,110,105,79,78,106,112,105,109,113,106,109,115,114,111,26,115,112,0,79,113,1,112,114,2,113,114,4,3,115,25,4,116,123,122,117,124,123,119,124,118,
+                        120,125,119,121,126,120,122,130,128,123,133,130,125,133,124,126,134,125,127,136,126,130,129,128,133,131,130,134,132,133,136,135,134,138,137,136,131,140,129,132,141,131,135,142,132,135,144,143,137,145,144,141,146,140,142,147,141,143,148,142,143,150,149,144,
+                        151,150,0,1,6,1,2,7,3,8,7,4,9,8,25,30,9,5,6,12,6,7,15,8,16,15,9,18,16,30,35,18,12,13,11,15,14,13,16,17,14,18,19,17,35,36,19,13,21,20,14,22,21,17,23,22,17,19,24,19,36,45,21,117,
+                        116,22,118,117,23,119,118,23,24,120,24,45,121,25,26,31,26,27,32,28,33,32,29,34,33,50,55,34,30,31,37,31,32,40,33,41,40,34,43,41,55,60,43,37,38,36,40,39,38,41,42,39,43,44,42,60,61,44,38,46,45,39,47,46,
+                        42,48,47,42,44,49,44,61,70,46,127,121,47,138,127,48,139,138,48,49,145,49,70,151,50,51,56,51,52,57,53,58,57,54,59,58,75,80,59,55,56,62,56,57,65,58,66,65,59,68,66,80,85,68,62,63,61,65,64,63,66,67,64,68,
+                        69,67,85,86,69,63,71,70,64,72,71,67,73,72,67,69,74,69,86,95,71,150,151,72,149,150,73,148,149,73,74,147,74,95,146,75,76,81,76,77,82,78,83,82,79,84,83,0,5,84,80,81,87,81,82,90,83,91,90,84,93,91,5,10,
+                        93,87,88,86,90,89,88,91,92,89,93,94,92,10,11,94,88,96,95,89,97,96,92,98,97,92,94,99,94,11,20,96,140,146,97,129,140,98,128,129,98,99,122,99,20,116,75,54,100,54,53,101,52,102,101,51,103,102,50,29,103,76,100,104,
+                        100,101,107,102,108,107,103,110,108,29,28,110,104,105,78,107,106,105,108,109,106,110,111,109,28,27,111,105,112,79,106,113,112,109,114,113,109,111,115,111,27,26,112,1,0,113,2,1,114,3,2,114,115,4,115,26,25,116,117,123,117,118,124,119,
+                        125,124,120,126,125,121,127,126,122,123,130,123,124,133,125,134,133,126,136,134,127,138,136,130,131,129,133,132,131,134,135,132,136,137,135,138,139,137,131,141,140,132,142,141,135,143,142,135,137,144,137,139,145,141,147,146,142,148,147,143,149,148,143,144,
+                        150,144,145,151};
+
+                    AddMeshVertsAndInds(totVerts,TEAPOT_MAX_NUM_MESH_VERTS,&numTotVerts,6,totInds,TEAPOT_MAX_NUM_MESH_INDS,&numTotInds,verts,sizeof(verts)/(sizeof(verts[0])*3),inds,sizeof(inds)/sizeof(inds[0]),(TeapotMeshEnum)i);
+                }
+#               endif
+            }
+            break;
             case TEAPOT_MESH_PLANE_X: {
 #               ifndef TEAPOT_MESH_PLANE_X
                 {
@@ -3177,6 +3986,48 @@ void Teapot_Init(void) {
 #               endif
             }
                 break;
+            case TEAPOT_MESH_STAR: {
+#               ifndef TEAPOT_NO_MESH_STAR
+                {
+                    // numVerts: 60;	numInds: 108 (36 triangles);
+                    // centerPoint: {0.000000,0.105040,0.000000};	halfExtents: {1.046162,0.994959,0.105000};
+                    const float A=0.100000,B=0.105000,C=0.000000,D=0.258368,E=0.355613,F=1.046162,G=0.339918,H=0.418048,I=0.135832,J=0.646564,K=0.889919,L=1.099999,M=0.439562;
+                    const float verts[60*3] = {
+                        -C,L,A,-D,E,B,-F,G,A,-H,-I,B,-J,-K,A,-C,-M,B,J,-K,A,H,-I,B,F,G,A,D,E,B,-C,L,-A,-D,E,-B,-F,G,-A,-H,-I,-B,-J,-K,-A,-C,-M,-B,J,-K,-A,H,-I,-B,F,G,-A,D,E,-B,F,G,A,D,E,B,F,G,-A,D,E,-B,-C,L,A,D,E,B,-C,L,-A,D,E,-B,J,-K,A,H,-I,B,J,-K,-A,H,-I,-B,
+                        H,-I,B,F,G,A,H,-I,-B,F,G,-A,-C,-M,B,J,-K,A,-C,-M,-B,J,-K,-A,-J,-K,A,-C,-M,B,-J,-K,-A,-C,-M,-B,-H,-I,B,-J,-K,A,-H,-I,-B,-J,-K,-A,-F,G,A,-H,-I,B,-F,G,-A,-H,-I,-B,-D,E,B,-F,G,A,-D,E,-B,-F,G,-A,-C,L,A,-D,E,B,-C,L,-A,-D,E,-B};
+
+                    const unsigned short inds[108] = {	// 36 triangles
+                        0,1,9,2,3,1,8,9,7,6,7,5,4,5,3,7,9,5,9,1,5,3,5,1,10,19,11,12,11,13,18,17,19,16,15,17,14,13,15,17,15,19,19,15,11,13,11,15,28,31,29,48,51,49,40,43,41,36,39,37,44,47,45,57,
+                        58,59,32,35,33,24,27,26,52,55,53,20,23,21,28,30,31,48,50,51,40,42,43,36,38,39,44,46,47,57,56,58,32,34,35,24,25,27,52,54,55,20,22,23};
+
+                    AddMeshVertsAndInds(totVerts,TEAPOT_MAX_NUM_MESH_VERTS,&numTotVerts,6,totInds,TEAPOT_MAX_NUM_MESH_INDS,&numTotInds,verts,sizeof(verts)/(sizeof(verts[0])*3),inds,sizeof(inds)/sizeof(inds[0]),(TeapotMeshEnum)i);
+                }
+#               endif
+            }
+                break;                                
+            case TEAPOT_MESH_HOLLOW_CYLINDER: {
+#               ifndef TEAPOT_NO_MESH_HOLLOW_CYLINDER
+                {
+                // numVerts: 96;	numInds: 288 (96 triangles);
+                // centerPoint: {0.000000,0.000000,0.000000};	halfExtents: {0.500000,0.500000,0.500000};
+                const float A=0.500000,B=-0.000000,C=0.170000,D=0.294449,E=0.250000,F=0.433013,G=0.340000;
+                const float verts[96*3] = {
+                    -B,-A,-G,-B,A,-G,C,-A,-D,C,A,-D,D,-A,-C,D,A,-C,G,-A,-B,G,A,-B,D,-A,C,D,A,C,C,-A,D,C,A,D,-B,-A,G,-B,A,G,-C,-A,D,-C,A,D,-D,-A,C,-D,A,C,-G,-A,-B,-G,A,-B,-D,-A,-C,-D,A,-C,-C,-A,-D,-C,A,-D,-B,-A,-A,E,-A,-F,E,A,-F,-B,A,-A,F,-A,-E,F,A,-E,A,-A,-B,A,A,-B,
+                    F,-A,E,F,A,E,E,-A,F,E,A,F,-B,-A,A,-B,A,A,-E,-A,F,-E,A,F,-F,-A,E,-F,A,E,-A,-A,-B,-A,A,-B,-F,-A,-E,-F,A,-E,-E,-A,-F,-E,A,-F,-B,A,-G,C,A,-D,D,A,-C,G,A,-B,D,A,C,C,A,D,-B,A,G,-C,A,D,-D,A,C,-G,A,-B,-D,A,-C,-C,A,-D,E,A,-F,-B,A,-A,F,A,-E,A,A,-B,
+                    F,A,E,E,A,F,-B,A,A,-E,A,F,-F,A,E,-A,A,-B,-F,A,-E,-E,A,-F,-B,-A,-G,C,-A,-D,D,-A,-C,G,-A,-B,D,-A,C,C,-A,D,-B,-A,G,-C,-A,D,-D,-A,C,-G,-A,-B,-D,-A,-C,-C,-A,-D,-B,-A,-A,E,-A,-F,F,-A,-E,A,-A,-B,F,-A,E,E,-A,F,-B,-A,A,-E,-A,F,-F,-A,E,-A,-A,-B,-F,-A,-E,-E,-A,-F};
+
+                const unsigned short inds[288] = {	// 96 triangles
+                    73,86,74,80,93,81,75,88,76,83,94,95,77,90,78,27,25,24,26,28,25,29,30,28,31,32,30,33,34,32,35,36,34,37,38,36,39,40,38,41,42,40,43,44,42,45,46,44,47,24,46,79,90,91,83,84,72,76,89,77,81,94,82,74,
+                    87,75,79,92,80,72,85,73,23,0,1,21,22,23,19,20,21,17,18,19,15,16,17,13,14,15,11,12,13,9,10,11,7,8,9,5,6,7,3,4,5,1,2,3,58,69,57,53,64,52,59,61,71,55,66,54,50,60,49,51,62,50,55,68,
+                    67,49,61,48,54,65,53,59,70,58,52,63,51,57,68,56,73,85,86,80,92,93,75,87,88,83,82,94,77,89,90,27,26,25,26,29,28,29,31,30,31,33,32,33,35,34,35,37,36,37,39,38,39,41,40,41,43,42,43,45,44,45,47,46,
+                    47,27,24,79,78,90,83,95,84,76,88,89,81,93,94,74,86,87,79,91,92,72,84,85,23,22,0,21,20,22,19,18,20,17,16,18,15,14,16,13,12,14,11,10,12,9,8,10,7,6,8,5,4,6,3,2,4,1,0,2,58,70,69,53,
+                    65,64,59,48,61,55,67,66,50,62,60,51,63,62,55,56,68,49,60,61,54,66,65,59,71,70,52,64,63,57,69,68};
+
+                AddMeshVertsAndInds(totVerts,TEAPOT_MAX_NUM_MESH_VERTS,&numTotVerts,6,totInds,TEAPOT_MAX_NUM_MESH_INDS,&numTotInds,verts,sizeof(verts)/(sizeof(verts[0])*3),inds,sizeof(inds)/sizeof(inds[0]),(TeapotMeshEnum)i);
+            }
+#               endif
+        }
+            break;
             case TEAPOT_MESH_SPHERE1: {
 #               ifndef TEAPOT_NO_MESH_SPHERE1
                 {
@@ -3409,6 +4260,26 @@ void Teapot_Init(void) {
 #               endif
             }
                 break;
+            case TEAPOT_MESH_STAR_2D: {
+#               ifndef TEAPOT_NO_MESH_STAR_2D
+                {
+                    // numVerts: 10;	numInds: 24 (8 triangles) front + the same back;
+                    // centerPoint: {0.000000,-0.275001,0.000000};	halfExtents: {1.046162,0.614918,0.000000};
+                    const float A=0.000000;
+                    const float verts[10*3] = {-A,1.099999,-A,-0.246065,0.338679,-A,-1.046162,0.339918,-A,-0.398141,-0.129364,-A,-0.646564,-0.889919,-A,-A,-0.418631,-A,0.646564,-0.889919,-A,0.398141,-0.129364,-A,1.046162,0.339918,-A,0.246065,0.338679,-A};
+
+                    const unsigned short inds[/*48*/] = {	// 16 triangles (front+back)
+                        0,1,9,2,3,1,8,9,7,6,7,5,4,5,3,7,9,5,9,1,5,3,5,1
+#                       ifndef TEAPOT_NO_MESH_STAR2D_BACK_FACE
+                        ,0,9,1,2,1,3,8,7,9,6,5,7,4,3,5,7,5,9,9,5,1,3,1,5
+#                       endif
+                    	};
+                    	
+                    AddMeshVertsAndInds(totVerts,TEAPOT_MAX_NUM_MESH_VERTS,&numTotVerts,6,totInds,TEAPOT_MAX_NUM_MESH_INDS,&numTotInds,verts,sizeof(verts)/(sizeof(verts[0])*3),inds,sizeof(inds)/sizeof(inds[0]),(TeapotMeshEnum)i);
+                }
+#               endif
+            }
+                break;                
             }
         }
 
@@ -3475,6 +4346,10 @@ void Teapot_Init(void) {
 #ifdef __cplusplus
 }
 #endif
+
+#ifdef COMPILER_SUPPORTS_GCC_DIAGNOSTIC
+#   pragma GCC diagnostic pop
+#endif //COMPILER_SUPPORTS_GCC_DIAGNOSTIC
 
 #endif //TEAPOT_IMPLEMENTATION_H
 #endif //TEAPOT_IMPLEMENTATION

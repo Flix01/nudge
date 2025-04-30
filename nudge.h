@@ -51,11 +51,12 @@
  * - Doxygen documentation
  *
  * \section building_sec Building
- * - Being a header-only library, all that is required is to define NUDGE_IMPLEMENTATION in a .cpp file before including "nudge.h"
+ * - Being a header-only library, all that is required is to define NUDGE_IMPLEMENTATION in a .cpp file before including "nudge.h".
  * - The library works only with SIMD enabled: the recommended requirements are AVX2 and FMA; the minimum requirement is just SSE2. In many cases adding something like -march=native in the compiler options is enough (in g++/clang++ syntax): -march=haswell is probably better for independent builds.
  * - \note Running a SIMD-compiled program on hardware where SIMD is not supported is likely to cause RANDOM CRASHES.
- * - \note When using emscripten, -msimd128 must be added to the other command-line (simd) options (please read <a href="https://emscripten.org/docs/porting/simd.html">[HERE]</a>). However not all browsers support SIMD by default (without activating it someway): that's one of the main reasons of random crashes inside browsers.
- * - \note The <a href="https://github.com/simd-everywhere/simde">[SIMDE]</a> library can be used to compile and run nudge replacing or removing SIMD support. One way to remove SIMD (through SIMDE) is to replace the SIMD compilation options with (g++/clang syntax): -DUSE_SIMDE -DSIMDE_NO_NATIVE (optionally with: -DSIMDE_ENABLE_OPENMP -fopenmp-simd) [TODO: check if this still works] (of course we should expect a performance penalty without SIMD support).
+ * - \note When compiling using emscripten, something that works for me (at least when I'm writing this) is: -msse2 -msimd128 -s STACK_SIZE=512kb -s ALLOW_MEMORY_GROWTH=1 (the first two flags set up SIMD support, the last two are not mandatory, but necessary in most cases, expecially the latter, to ensure that the program has enough memory to run, and to prevent crashes at startup inside browsers). However not all browsers support SIMD by default (without activating it someway): that's one of the reasons of random crashes inside browsers, after the program starts.
+ * - \note Note that emscripten does not support FMA as far as I know, so something like: -mavx2 -msimd128 does not compile (nudge.h seems to use AVX2 only with FMA).
+ * - \note The <a href="https://github.com/simd-everywhere/simde">[SIMDE]</a> library can be used to compile and run nudge replacing or removing SIMD support. One way to remove SIMD (through SIMDE) is to replace the SIMD compilation flags with (g++/clang syntax): -DUSE_SIMDE -DSIMDE_NO_NATIVE (optionally with: -DSIMDE_ENABLE_OPENMP -fopenmp-simd) [tested: it works when I'm writing this (hopefully without SIMD)]. Of course we should expect a performance penalty when running without SIMD support (but in any case consider that there's always an overhead when running something inside a web browser).
  * - The library documentation (recommended) can be generated with the doxygen command launched from the same folder as the Doxyfile file.
  *
  * \section usage_sec Usage
@@ -66,7 +67,7 @@
  * // file example01.cpp (in the ./example folder)
  * // g++ example01.cpp -I../ -I./ -march=native -O3 -Wall -o example01
  * // or using emscripten, with output in a subfolder named ./html :
- * // em++ -O3 -msse2 -msimd128 -fno-rtti -fno-exceptions -o html/nudge_example01.html ./example01.cpp -I"./" -I"../"
+ * // em++ -O3 -msse2 -msimd128 -fno-rtti -fno-exceptions -s ALLOW_MEMORY_GROWTH=1 -o html/nudge_example01.html ./example01.cpp -I"./" -I"../"
  *
  * #define NUDGE_IMPLEMENTATION // [TODO 0] better do this in another cpp file to speed up recompilations
  * #include "nudge.h"
@@ -92,7 +93,7 @@
  *        // Update simulation
  *        const unsigned substeps = pre_simulation_step(&c,elapsed_time_from_previous_frame_in_seconds);   // mandatory call (substeps are the number of physic frames that are going to be performed in simulation_step(...))
  *        if (substeps>0) {
- *              // here you can move manually kinematic bodies for example, using nudge::TransformAssignToBody(...)
+ *              // here you can manually move kinematic bodies, for example, using nudge::TransformAssignToBody(...)
  *        }
  *        simulation_step(&c);  // mandatory call (main function of the library)
  *
@@ -1329,15 +1330,23 @@ namespace nudge {
     /**
      * @brief Converts a column-major 16-floats matrix without any scaling applied to a nudge::Transform
      * @param Tout the output nudge::Transform
-     * @param matrix16WithourScaling the input column-major 16-floats matrix without any scaling applied
+     * @param matrix16WithoutScaling the input column-major 16-floats matrix without any scaling applied
+     * @return the same as Tout (for chaining the call only)
      */
-    void Mat4WithoutScalingToTransform(Transform* Tout,const float* matrix16WithourScaling);
+    Transform* Mat4WithoutScalingToTransform(Transform* Tout,const float* matrix16WithoutScaling);
+    /**
+     * @brief Converts a column-major 16-floats matrix without any scaling applied to a nudge::Transform
+     * @param matrix16WithoutScaling the input column-major 16-floats matrix without any scaling applied
+     * @return the output nudge::Transform (by value)
+     */
+    Transform Mat4WithoutScalingToTransform(const float* matrix16WithoutScaling);
     /**
      * @brief Converts a nudge::Transform to a column-major 16-floats matrix
      * @param matrix16Out the output column-major 16-floats matrix
      * @param T the input nudge::Transform
+     * @return the same as matrix16Out (for chaining the call only)
      */
-    void TransformToMat4(float* matrix16Out,const Transform* T);
+    float *TransformToMat4(float* matrix16Out,const Transform* T);
     /**
      * @brief Assigns a new Transform to a body, and sets its linear and angular velocities based on the differences between the new transform and the old one: this is essential when manually moving bodies by changing their transform.
      * @param c the nudge context
@@ -1353,7 +1362,7 @@ namespace nudge {
      * @param body the target body index
      * @param deltaTime the (small) time difference in seconds
      */
-    void TransformAdvanceBodyFromVelocities(context_t* c,unsigned body,float deltaTime);    // advance body Transform based on its lin and ang velocities
+    void TransformAdvanceBodyFromVelocities(context_t* c,unsigned body,float deltaTime);
     /**
      * @brief Applies (spherical) lerp between T0 and T1
      * @param T0
@@ -3168,18 +3177,27 @@ void nm_QuatToAngleAxis(const float* __restrict q4,float* __restrict rfAngleOut1
             rkAxisOut[0]=q[0]*tmp2; rkAxisOut[1]=q[1]*tmp2; rkAxisOut[2]=q[2]*tmp2;
         }*/
 }
-void Mat4WithoutScalingToTransform(Transform* Tout,const float* matrix16WithourScaling)  {
-    if (matrix16WithourScaling)    {
-        nm_QuatFromMat4(Tout->rotation,matrix16WithourScaling);
-        memcpy(Tout->position,&matrix16WithourScaling[12],3*sizeof(float));
+Transform* Mat4WithoutScalingToTransform(Transform* Tout, const float* matrix16WithoutScaling)  {
+    if (matrix16WithoutScaling)    {
+        nm_QuatFromMat4(Tout->rotation,matrix16WithoutScaling);
+        memcpy(Tout->position,&matrix16WithoutScaling[12],3*sizeof(float));
     }
     else *Tout = identity_transform;
+    return Tout;
 }
-void TransformToMat4(float* matrix16Out,const Transform* T)    {
+Transform Mat4WithoutScalingToTransform(const float* matrix16WithoutScaling)    {
+    Transform Tout;
+    assert(matrix16WithoutScaling);
+    nm_QuatFromMat4(Tout.rotation,matrix16WithoutScaling);
+    memcpy(Tout.position,&matrix16WithoutScaling[12],3*sizeof(float));
+    return Tout;
+}
+float* TransformToMat4(float* matrix16Out,const Transform* T)    {
     int i;
     nm_Mat4SetRotationFromQuat(matrix16Out,T->rotation);
     for (i=0;i<3;i++) matrix16Out[12+i] = T->position[i];
     matrix16Out[3]=matrix16Out[7]=matrix16Out[11]=0.f;matrix16Out[15]=1.f;
+    return matrix16Out;
 }
 float* nm_QuatMulVec3(float* __restrict vOut3,const float* __restrict q4,const float* __restrict vIn3)   {
     float uv[3],uuv[3];int i;

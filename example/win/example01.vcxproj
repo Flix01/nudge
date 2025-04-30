@@ -20,9 +20,9 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>
-    <ProjectGuid>{929FB54A-6A75-4FA6-B0F0-E1E3390C7E55}</ProjectGuid>
+    <ProjectGuid>{D2E6147E-1234-5678-90AB-CDEF01234567}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <RootNamespace>example</RootNamespace>
+    <RootNamespace>example01</RootNamespace>
     <WindowsTargetPlatformVersion>10.0.15063.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -142,8 +142,8 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\nudge.cpp" />
-    <ClCompile Include="..\main.cpp" />
+    <ClCompile Include="..\stdafx.cpp" />
+    <ClCompile Include="..\example01.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\nudge.h" />
