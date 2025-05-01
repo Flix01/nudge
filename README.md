@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Nudge is a small data-oriented and SIMD-optimized 3D rigid body physics library created by Rasmus Barringer in 2017 ([GitHub](https://github.com/rasmusbarr/nudge)).
+Nudge is a single-file, header-only, c++ small data-oriented and SIMD-optimized 3D rigid body physics library created by Rasmus Barringer in 2017 ([GitHub](https://github.com/rasmusbarr/nudge)).
 
 This 2024 version ([GitHub](https://github.com/Flix01/nudge/tree/master)) is just an **attempt** to ease user experience, by embedding part of the original demo code into the library itself, and extending some of its functionalities.
 
@@ -23,7 +23,7 @@ This 2024 version ([GitHub](https://github.com/Flix01/nudge/tree/master)) is jus
 
 ![example](./screenshots/example.png)
 
-<b>example/example02.cpp or example/example03.cpp</b> (_example03.cpp_ is currently just a cut-down version of _example02_ compatible with emscripten)
+<b>example/example02.cpp or example/example03.cpp</b> (_example03.cpp_ is currently just a cut-down version of _example02_ compatible with emscripten)<b>:</b>
 
 Click this screenshoot for a <b>WebGL version of the demo</b> (a desktop PC is recommended):
  
