@@ -85,6 +85,7 @@ example/example01
 example/example02
 example/example03
 example/Makefile
+!example/win/Makefile
 example/linux/example*
 example/mac/example*
 nudge_examples.pro
