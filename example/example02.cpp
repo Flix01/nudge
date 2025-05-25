@@ -2195,7 +2195,7 @@ void drawShape(ShapeEnum shape) {
 	glCallList(dl);
 }
 
-void glDrawCylinder(float radiusTop,float radiusBottom,float height,int slices=8,int axis=1,bool center_in_height=true,uint lateralSurfaceMask=3,
+void glDrawCylinder(float radiusTop,float radiusBottom,float height,int slices=8,int axis=1,bool center_in_height=true,unsigned lateralSurfaceMask=3,
                     float deltaRadiusTopX=0,float deltaRadiusTopY=0,float deltaRadiusTopZ=0,
                     float deltaRadiusBottomX=0,float deltaRadiusBottomY=0,float deltaRadiusBottomZ=0) {
     // glutSolidCylinder(radius,height,slices,1) [available only in freeglut.h, not in glut.h]
@@ -2246,11 +2246,11 @@ void glDrawCylinder(float radiusTop,float radiusBottom,float height,int slices=8
     }
 }
 
-void glDrawCylinderX(float radius,float height,int slices=8, bool center_in_height=true,uint lateralSurfaceMask=3,float deltaRadiusTopX=0,float deltaRadiusTopY=0,float deltaRadiusTopZ=0,float deltaRadiusBottomX=0,float deltaRadiusBottomY=0,float deltaRadiusBottomZ=0)
+void glDrawCylinderX(float radius,float height,int slices=8, bool center_in_height=true,unsigned lateralSurfaceMask=3,float deltaRadiusTopX=0,float deltaRadiusTopY=0,float deltaRadiusTopZ=0,float deltaRadiusBottomX=0,float deltaRadiusBottomY=0,float deltaRadiusBottomZ=0)
     {glDrawCylinder(radius,radius,height,slices,0,center_in_height,lateralSurfaceMask,deltaRadiusTopX,deltaRadiusTopY,deltaRadiusTopZ,deltaRadiusBottomX,deltaRadiusBottomY,deltaRadiusBottomZ);}
-void glDrawCylinderY(float radius,float height,int slices=8, bool center_in_height=true,uint lateralSurfaceMask=3,float deltaRadiusTopX=0,float deltaRadiusTopY=0,float deltaRadiusTopZ=0,float deltaRadiusBottomX=0,float deltaRadiusBottomY=0,float deltaRadiusBottomZ=0)
+void glDrawCylinderY(float radius,float height,int slices=8, bool center_in_height=true,unsigned lateralSurfaceMask=3,float deltaRadiusTopX=0,float deltaRadiusTopY=0,float deltaRadiusTopZ=0,float deltaRadiusBottomX=0,float deltaRadiusBottomY=0,float deltaRadiusBottomZ=0)
     {glDrawCylinder(radius,radius,height,slices,1,center_in_height,lateralSurfaceMask,deltaRadiusTopX,deltaRadiusTopY,deltaRadiusTopZ,deltaRadiusBottomX,deltaRadiusBottomY,deltaRadiusBottomZ);}
-void glDrawCylinderZ(float radius,float height,int slices=8, bool center_in_height=true,uint lateralSurfaceMask=3,float deltaRadiusTopX=0,float deltaRadiusTopY=0,float deltaRadiusTopZ=0,float deltaRadiusBottomX=0,float deltaRadiusBottomY=0,float deltaRadiusBottomZ=0)
+void glDrawCylinderZ(float radius,float height,int slices=8, bool center_in_height=true,unsigned lateralSurfaceMask=3,float deltaRadiusTopX=0,float deltaRadiusTopY=0,float deltaRadiusTopZ=0,float deltaRadiusBottomX=0,float deltaRadiusBottomY=0,float deltaRadiusBottomZ=0)
     {glDrawCylinder(radius,radius,height,slices,2,center_in_height,lateralSurfaceMask,deltaRadiusTopX,deltaRadiusTopY,deltaRadiusTopZ,deltaRadiusBottomX,deltaRadiusBottomY,deltaRadiusBottomZ);}
 
 
@@ -2949,7 +2949,7 @@ void HandleMenus(void)  {
         glguihelp("/h[5]/v[7]\n/c[%d]Made in EU",N);
 
         static float FPS=60.f,sum=0.f;static int cnt=0;
-        sum+=globals.instantFrameTime;if (cnt==60) {FPS=sum>0?60.f/sum:60.f;sum=0;cnt=0;}
+        sum+=globals.instantFrameTime;if (++cnt==60) {FPS=sum>0?60.f/sum:60.f;sum=0;cnt=0;}
         glguihelp("/h[9]/v[9]\n\n/c[%d]FPS: %1.f",N,FPS);
 
         if (globals.bodies.num_stars>0) {

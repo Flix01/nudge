@@ -40,7 +40,7 @@
 #include <OpenGL/gl.h>
 #elif defined(_WIN32)
 #include <GLUT/glut.h>
-#include <gl/gl.h>
+#include <GL/gl.h>
 #else // Linux.
 #include <GL/glut.h>
 #include <GL/gl.h>

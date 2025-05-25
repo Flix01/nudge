@@ -17,13 +17,13 @@
 *.pch
 
 # Libraries
-*.lib
+#*.lib
 *.a
 *.la
 *.lo
 
 # Shared objects (inc. Windows DLLs)
-*.dll
+#*.dll
 *.so
 *.so.*
 *.dylib
@@ -62,7 +62,6 @@ reps/
 *.cfg
 *.ini
 *.exe
-*.dll
 *.7z
 *.sav
 original_version/example/html
@@ -96,6 +95,8 @@ example/example03_include/meshes/
 simde/
 simde
 original_version/
+example/example03_include/sdf.h
+example/example03_include/util
 
 
 

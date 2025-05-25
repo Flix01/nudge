@@ -54,8 +54,8 @@
 //#define DYNAMIC_RESOLUTION_SHADOW_MAP_MAX_HEIGHT      (2048)       // needs a value (default 2048). It clamps: shadow_texture.height = DYNAMIC_RESOLUTION_SHADOW_MAP_SIZE_MULTIPLIER * screen.height); // (or its nearest POT)
 //#define DYNAMIC_RESOLUTION_SHADOW_MAP_RECTANGULAR                 // WIP. When it's NOT defined then: if (shadow_texture.width<shadow_texture.height)  shadow_texture.width=shadow_texture.height; else shadow_texture.height=shadow_texture.width;
 //#define DYNAMIC_RESOLUTION_SHADOW_USE_NEAREST_TEXTURE_FILTER
-//#define DYNAMIC_RESOLUTION_SHADOW_USE_PCF (3)   // (Optional) Smooths shadows a bit, but its more expensive; with emscripten, it needs: -s USE_WEBGL2=1
-//#define TEAPOT_SHADER_SHADOW_MAP_PCF (3)    // This is the same as before for teapot.h. I guess thay must be kept in sync... even if this def seems to do nothing...
+//#define DYNAMIC_RESOLUTION_SHADOW_USE_PCF (2)   // (Optional) Smooths shadows a bit, but its more expensive (expecially with bigger numbers); with emscripten, it needs: -s USE_WEBGL2=1
+//#define TEAPOT_SHADER_SHADOW_MAP_PCF (2)    // This is the same as before for teapot.h. I guess thay must be kept in sync... even if this def seems to do nothing...
 #include "dynamic_resolution.h"
 
 #include <math.h> // sqrt (this should be included in teapot.h, shouldn't it?)
@@ -64,6 +64,12 @@
 //#define TEAPOT_SHADER_FOG_HINT_FRAMENT_SHADER   // Better fog on ground plane (but a bit expensive)
 #define TEAPOT_SHADER_USE_SHADOW_MAP // needs DYNAMIC_RESOLUTION_SHADOW_MAP_DISABLED not defined
 #include "teapot.h"
+
+#ifdef USE_SDF // signed distance fonts (not included in the nudge repository)
+#define SDF_NO_STL
+#define SDF_NO_MENUS
+#include "sdf.h"
+#endif
 // ----------------------------------------
 #endif //EXAMPLE03_CPP
 

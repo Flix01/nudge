@@ -88,9 +88,9 @@
     <OutputType>Exe</OutputType>
     <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
     <Optimization>MaxSpeed</Optimization>
-    <AdditionalDependencies>freeglut.lib;opengl32.lib;</AdditionalDependencies>
+    <AdditionalDependencies>glew32.lib;freeglut.lib;opengl32.lib;</AdditionalDependencies>
     <AdditionalLibraryDirectories>.</AdditionalLibraryDirectories>
-    <AdditionalIncludeDirectories>GLUT</AdditionalIncludeDirectories>    
+    <AdditionalIncludeDirectories>GLEW;GLUT</AdditionalIncludeDirectories>    
 </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>

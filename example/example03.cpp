@@ -100,10 +100,8 @@ enum ColorEnum {
     COLOR_ORCHID/*0xDA70D6FF*/,COLOR_PALEGOLDENROD/*0xEEE8AAFF*/,COLOR_PALEGREEN/*0x98FB98FF*/,COLOR_PALETURQUOISE/*0xAFEEEEFF*/,COLOR_PALEVIOLETRED/*0xDB7093FF*/,COLOR_PAPAYAWHIP/*0xFFEFD5FF*/,COLOR_PEACHPUFF/*0xFFDAB9FF*/,COLOR_PERU/*0xCD853FFF*/,COLOR_PINK/*0xFFC0CBFF*/,COLOR_PLUM/*0xDDA0DDFF*/,COLOR_POWDERBLUE/*0xB0E0E6FF*/,COLOR_PURPLE/*0x800080FF*/,COLOR_RED/*0xFF0000FF*/,COLOR_ROSYBROWN/*0xBC8F8FFF*/,COLOR_ROYALBLUE/*0x4169E1FF*/,COLOR_SADDLEBROWN/*0x8B4513FF*/,COLOR_SALMON/*0xFA8072FF*/,COLOR_SANDYBROWN/*0xF4A460FF*/,COLOR_SEAGREEN/*0x2E8B57FF*/,COLOR_SEASHELL/*0xFFF5EEFF*/,
     COLOR_SIENNA/*0xA0522DFF*/,COLOR_SILVER/*0xC0C0C0FF*/,COLOR_SKYBLUE/*0x87CEEBFF*/,COLOR_SLATEBLUE/*0x6A5ACDFF*/,COLOR_SLATEGRAY/*0x708090FF*/,COLOR_SNOW/*0xFFFAFAFF*/,COLOR_SPRINGGREEN/*0x00FF7FFF*/,COLOR_STEELBLUE/*0x4682B4FF*/,COLOR_TAN/*0xD2B48CFF*/,COLOR_TEAL/*0x008080FF*/,COLOR_THISTLE/*0xD8BFD8FF*/,COLOR_TOMATO/*0xFF6347FF*/,COLOR_TURQUOISE/*0x40E0D0FF*/,COLOR_VIOLET/*0xEE82EEFF*/,COLOR_WHEAT/*0xF5DEB3FF*/,COLOR_WHITE/*0xFFFFFFFF*/,COLOR_WHITESMOKE/*0xF5F5F5FF*/,COLOR_YELLOW/*0xFFFF00FF*/,COLOR_YELLOWGREEN/*0x9ACD32FF*/,COLOR_COUNT
 };
-void Teapot_SetColorEnum(ColorEnum color); // internally calls Teapot_SetColor(...)
-inline void Teapot_SetHalfScaling(float scalingX,float scalingY,float scalingZ) {
-    Teapot_SetScaling(2.f*scalingX,2.f*scalingY,2.f*scalingZ);
-}
+
+
 namespace nudge {NUDGE_CONSTEXPR FlagMask BF_IS_SHADOW_PASS_FRUSTUM_CULLED=1<<14,BF_IS_SHADOW_AND_RENDERING_PASS_FRUSTUM_CULLED=BF_IS_SHADOW_PASS_FRUSTUM_CULLED|BF_IS_FRUSTUM_CULLED;}
 
 
@@ -146,7 +144,17 @@ static struct globals_t {
     unsigned use_shadows;
     unsigned is_shadow_pass;
     float mMatrices[TOT_NUM_BODIES*16]; // we cache body mMatrices just because otherwise we must calculate them twice each frame (one for shadow pass and one for rendering pass: see DrawPhysics(...))
-} globals = {{},1,0,{{{0,2,0},2*M_PI,M_PI*0.125f,20,{0,0,0}},{{0,2,0},M_PI,M_PI*0.125f,5,{0,0,0}}},{1,1,1.5},{45.f,0.75f,75.0f},{0,0,0,(uint32_t)-1,0,0},16.2,{NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,0,(unsigned)-1,0},1,0,0,1,0,{}};
+
+    struct sdf_t {
+    #define SDF_MAX_NUM_TEXT_CHUNKS (12)
+        struct SdfTextChunk* textChunks[SDF_MAX_NUM_TEXT_CHUNKS];
+        unsigned numTextChunks;
+        struct SdfTextChunk *textChunkFlashMessage;
+    } sdf;
+
+} globals = {{},1,0,{{{0,2,0},2*M_PI,M_PI*0.125f,20,{0,0,0}},{{0,2,0},M_PI,M_PI*0.125f,5,{0,0,0}}},{1,1,1.5},{45.f,0.75f,75.0f},{0,0,0,(uint32_t)-1,0,0},16.2,{NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,NUDGE_INVALID_BODY_ID,0,(unsigned)-1,0},1,0,0,1,0,{},
+            {{},0,NULL} // sdf line
+                                                                                                                                                                                                                                                                                                         };
 static nudge::context_t* c = &globals.nudge_context;	// shorter... we'll use this
 
 
@@ -911,6 +919,13 @@ void UpdatePhysics(double elapsedSecondsFromLastCall) {
 void CharacterControllerFixSinkingEffectOnFall(unsigned body,float* mMatrix16,int16_t aux_body);  // forward declaration
 int glIsAabbVisible(const float*__restrict mMatrix16,float aabbCenterX,float aabbCenterY,float aabbCenterZ,float aabbHalfExtentX,float aabbHalfExtentY,float aabbHalfExtentZ); // forward declaration
 int glIsAabbVisible(const float* __restrict Tpos3,float aabbEnlargedRadius); // forward declaration
+void Teapot_SetColorEnum(ColorEnum color);// forward declaration
+// Here we declare some global function ptrs, so that we can use the same functions for both rendering passes (shadow pass + normal pass)
+void (*glSetColorEnum)(ColorEnum color) = &Teapot_SetColorEnum;
+void (*glSetColor)(float R,float G, float B, float A) = &Teapot_SetColor;
+void (*glDrawMesh)(const float mMatrix[16],TeapotMeshEnum mesh) = &Teapot_Draw;
+void (*glSetScaling)(float scalingX,float scalingY,float scalingZ) = &Teapot_SetScaling;
+inline void glSetHalfScaling(float scalingX,float scalingY,float scalingZ) {glSetScaling(2.f*scalingX,2.f*scalingY,2.f*scalingZ);} // shortcut
 void DrawPhysics(const int rendering_pass,const int num_rendering_passes)  {
     using namespace nudge;
     // Note: this function is part of DrawGL, and it occasionally contains gl calls
@@ -1001,59 +1016,32 @@ void DrawPhysics(const int rendering_pass,const int num_rendering_passes)  {
             // In case of graphic center mismatches I suggest to: 1) center the mesh built with add_compound(...), using last argument, or 2) Calculate (info->aabb_center+info->com_offset) and use it when redering the graphic body.
 
             if (shape<TEAPOT_MESH_COUNT) {
-                if (is_shadow_pass) {
-                    if (shape==TEAPOT_MESH_CAPSULE) {
-                        // For capsules, Teapot_SetScaling(x,y,z) is interpreted this way:
-                        // diameter = (x+z)/2; cylinderHeight = y. So the total height is: (cylinderHeight + diameter)
-                        // This was made to force uniform scaling of the two half spheres.
-                        const float r = (aabb_hextents[0]+aabb_hextents[2])*0.5f;   // radius of the capsule
-                        const float hh = aabb_hextents[1]-r;                        // half height of the cylinder
-                        Dynamic_Resolution_Shadow_Set_Scaling(r*2.f,hh*2.f,r*2.f);
-                    }
-                    else if ((shape>=TEAPOT_MESH_CUBE && shape<=TEAPOT_MESH_CUBE_ROUNDED)
-                             || (shape>=TEAPOT_MESH_SPHERE1 && shape<=TEAPOT_MESH_SPHERE1)) {
-                        // This branch is optional (performance optimization for meshes that are originally stored inside teapot.h with a cubic aabb)
-                        // It can probably be extended to a few other meshes
-                        Dynamic_Resolution_Shadow_Set_Scaling(aabb_hextents[0]*2.f,aabb_hextents[1]*2.f,aabb_hextents[2]*2.f);
-                    }
-                    else {
-                        // This should work for everything (with a few exception (e.g. capsules)
-                        float graphic_mesh_half_extents[3];Teapot_GetMeshAabbHalfExtents(shape,graphic_mesh_half_extents);
-                        Dynamic_Resolution_Shadow_Set_Scaling(aabb_hextents[0]/graphic_mesh_half_extents[0],
-                                aabb_hextents[1]/graphic_mesh_half_extents[1],
-                                aabb_hextents[2]/graphic_mesh_half_extents[2]);
-                    }
-                    Dynamic_Resolution_Shadow_Set_MMatrix(mMatrix);
-                    Teapot_LowLevel_DrawElements(shape);
+                glSetColorEnum(color);
+                if (shape==TEAPOT_MESH_CAPSULE) {
+                    // For capsules, Teapot_SetScaling(x,y,z) is interpreted this way:
+                    // diameter = (x+z)/2; cylinderHeight = y. So the total height is: (cylinderHeight + diameter)
+                    // This was made to force uniform scaling of the two half spheres.
+                    const float r = (aabb_hextents[0]+aabb_hextents[2])*0.5f;   // radius of the capsule
+                    const float hh = aabb_hextents[1]-r;                        // half height of the cylinder
+                    glSetHalfScaling(r,hh,r);
+                }
+                else if ((shape>=TEAPOT_MESH_CUBE && shape<=TEAPOT_MESH_CUBE_ROUNDED)
+                         || (shape>=TEAPOT_MESH_SPHERE1 && shape<=TEAPOT_MESH_SPHERE1)
+                         || (shape>=TEAPOT_MESH_PLANE_X && shape<=TEAPOT_MESH_STAR_2D)
+                         || (shape>=TEAPOT_MESH_TEXT_X)
+                         ) {
+                    // This branch is optional (performance optimization for meshes that are originally stored inside teapot.h with a cubic aabb)
+                    // It can probably be extended to a few other meshes
+                    glSetHalfScaling(aabb_hextents[0],aabb_hextents[1],aabb_hextents[2]);
                 }
                 else {
-                    Teapot_SetColorEnum(color); // internally this calls glColor3fv(...)
-                    if (shape==TEAPOT_MESH_CAPSULE) {
-                        // For capsules, Teapot_SetScaling(x,y,z) is interpreted this way:
-                        // diameter = (x+z)/2; cylinderHeight = y. So the total height is: (cylinderHeight + diameter)
-                        // This was made to force uniform scaling of the two half spheres.
-                        const float r = (aabb_hextents[0]+aabb_hextents[2])*0.5f;   // radius of the capsule
-                        const float hh = aabb_hextents[1]-r;                        // half height of the cylinder
-                        Teapot_SetHalfScaling(r,hh,r);
-                    }
-                    else if ((shape>=TEAPOT_MESH_CUBE && shape<=TEAPOT_MESH_CUBE_ROUNDED)
-                             || (shape>=TEAPOT_MESH_SPHERE1 && shape<=TEAPOT_MESH_SPHERE1)
-                             || (shape>=TEAPOT_MESH_PLANE_X && shape<=TEAPOT_MESH_STAR_2D)
-                             || (shape>=TEAPOT_MESH_TEXT_X)
-                             ) {
-                        // This branch is optional (performance optimization for meshes that are originally stored inside teapot.h with a cubic aabb)
-                        // It can probably be extended to a few other meshes
-                        Teapot_SetHalfScaling(aabb_hextents[0],aabb_hextents[1],aabb_hextents[2]);
-                    }
-                    else {
-                        // This should work for everything (with a few exception (e.g. capsules)
-                        float graphic_mesh_half_extents[3];Teapot_GetMeshAabbHalfExtents(shape,graphic_mesh_half_extents);
-                        Teapot_SetScaling(aabb_hextents[0]/graphic_mesh_half_extents[0],
-                                aabb_hextents[1]/graphic_mesh_half_extents[1],
-                                aabb_hextents[2]/graphic_mesh_half_extents[2]);
-                    }
-                    Teapot_Draw(mMatrix,shape);
+                    // This should work for everything (with a few exception (e.g. capsules)
+                    float graphic_mesh_half_extents[3];Teapot_GetMeshAabbHalfExtents(shape,graphic_mesh_half_extents);
+                    glSetScaling(aabb_hextents[0]/graphic_mesh_half_extents[0],
+                            aabb_hextents[1]/graphic_mesh_half_extents[1],
+                            aabb_hextents[2]/graphic_mesh_half_extents[2]);
                 }
+                glDrawMesh(mMatrix,shape);
             }
         }
         else {
@@ -1070,7 +1058,7 @@ void DrawPhysics(const int rendering_pass,const int num_rendering_passes)  {
                     else if (is_sleeping_and_dynamic) color = sleeping_color;
                     else if (has_com_offset) color = com_offset_body_color;
                 }
-                Teapot_SetColorEnum(color);
+                glSetColorEnum(color);
             }
 
             const BodyLayout* layout = &c->bodies.layouts[body];	// BodyLayout hosts the indices of the body colliders (i.e. collision shapes). The global arrays of colliders are in c->colliders.boxes and c->colliders.spheres
@@ -1082,15 +1070,8 @@ void DrawPhysics(const int rendering_pass,const int num_rendering_passes)  {
                     const Transform T = TransformMul(*T1,*T2);
                     const BoxCollider* coll = &c->colliders.boxes.data[i];
                     TransformToMat4(mMatrix,&T);
-                    if (is_shadow_pass) {
-                        Dynamic_Resolution_Shadow_Set_Scaling(coll->size[0]*2.f,coll->size[1]*2.f,coll->size[2]*2.f);
-                        Dynamic_Resolution_Shadow_Set_MMatrix(mMatrix);
-                        Teapot_LowLevel_DrawElements(TEAPOT_MESH_CUBE);
-                    }
-                    else {
-                        Teapot_SetHalfScaling(coll->size[0],coll->size[1],coll->size[2]);
-                        Teapot_Draw(mMatrix,TEAPOT_MESH_CUBE);
-                    }
+                    glSetHalfScaling(coll->size[0],coll->size[1],coll->size[2]);
+                    glDrawMesh(mMatrix,TEAPOT_MESH_CUBE);
                 }
             }
             if (layout->num_spheres>0) {
@@ -1101,15 +1082,8 @@ void DrawPhysics(const int rendering_pass,const int num_rendering_passes)  {
                     const Transform T = TransformMul(*T1,*T2);
                     const SphereCollider* coll = &c->colliders.spheres.data[i];
                     TransformToMat4(mMatrix,&T);
-                    if (is_shadow_pass) {
-                        Dynamic_Resolution_Shadow_Set_Scaling(coll->radius*2.f,coll->radius*2.f,coll->radius*2.f);
-                        Dynamic_Resolution_Shadow_Set_MMatrix(mMatrix);
-                        Teapot_LowLevel_DrawElements(TEAPOT_MESH_SPHERE1);
-                    }
-                    else {
-                        Teapot_SetHalfScaling(coll->radius,coll->radius,coll->radius);
-                        Teapot_Draw(mMatrix,TEAPOT_MESH_SPHERE1);
-                    }
+                    glSetHalfScaling(coll->radius,coll->radius,coll->radius);
+                    glDrawMesh(mMatrix,TEAPOT_MESH_SPHERE1);
                 }
             }
 
@@ -1126,7 +1100,7 @@ void DrawPhysics(const int rendering_pass,const int num_rendering_passes)  {
             )
     {
         glLineWidth(1.f);
-        Teapot_SetColor(0.8f,0.8f,0.8f,1.f);
+        glSetColor(0.8f,0.8f,0.8f,1.f);
         for (unsigned i=0;i<c->active_bodies.count;i++) {
             const unsigned body = c->active_bodies.indices[i];
             const BodyFilter* filter = &c->bodies.filters[body];
@@ -1134,8 +1108,8 @@ void DrawPhysics(const int rendering_pass,const int num_rendering_passes)  {
             const BodyInfo* info = &c->bodies.infos[body];
             float mMatrix[16];TransformToMat4(mMatrix,&c->bodies.transforms[body]);
             if (filter->flags&BF_HAS_COM_OFFSET)   {for (int l=0;l<3;l++) mMatrix[12+l]-=mMatrix[l]*info->com_offset[0]+mMatrix[4+l]*info->com_offset[1]+mMatrix[8+l]*info->com_offset[2];}
-            Teapot_SetHalfScaling(info->aabb_half_extents[0],info->aabb_half_extents[1],info->aabb_half_extents[2]);
-            Teapot_Draw(mMatrix,TEAPOT_MESHLINES_CUBE_EDGES);
+            glSetHalfScaling(info->aabb_half_extents[0],info->aabb_half_extents[1],info->aabb_half_extents[2]);
+            glDrawMesh(mMatrix,TEAPOT_MESHLINES_CUBE_EDGES);
         }
         //glprintf("Active_bodies:%u\n",c->active_bodies.count);
     }
@@ -1202,10 +1176,14 @@ uint16_t glGetNudgeBodyAtMouseCoords(nudge::context_t* c,int mouseX,int mouseY,i
 void HandleKeys(void) {
     const globals_t::key_t* key = &globals.key;
 
+    static char log_key[32]="";static char log_message[512] = "";    // a bit dangerous... size must be enough
+    log_key[0]=log_message[0]='\0';
+
     // keys to modify globals.gui.menu_idx: it must be done once per frame (devs: if you move HandleKeys(...) around, extract this block and call it in the original spot before the move)
     if ((key->pressed&(KEY_H|KEY_M|KEY_ESC)) && !(key->down&KEY_ALL_MODIFIER_KEYS))   {
         // Placing this code in the wrong place means breaking all the glprintf(...), glguihelp(...), glguimenu(...) calls
         if ((key->pressed&KEY_H)) {
+            strcpy(log_key,"[H]");sprintf(log_message,"%s\n",Dynamic_Resolution_GetInfoString());
             nudge::log("[H] %s\n",Dynamic_Resolution_GetInfoString());
             if (globals.use_frustum_culling) nudge::log("[H] num_frustum_culled_bodies: %u/%u\n",globals.num_frustum_culled_bodies,c->bodies.count-c->global_data.removed_bodies_count);
             nudge::log("[H] num_stars: %u/12\n",globals.bodies.num_stars);
@@ -1213,6 +1191,7 @@ void HandleKeys(void) {
         }
         else if ((key->pressed&KEY_M)) {
             globals.use_shadows=!globals.use_shadows;
+            strcpy(log_key,"[M]");sprintf(log_message,"shadow mapping: %s\n",globals.use_shadows?"enabled":"disabled");
             nudge::log("[M] shadow mapping: %s\n",globals.use_shadows?"enabled":"disabled");nudge::flush();
         }
         else if (key->pressed&(KEY_ESC)) {
@@ -1231,21 +1210,24 @@ void HandleKeys(void) {
             //-----------------------------------------------
             // Note that here we don't reset all the fields in the 'globals' struct (e.g. camera, etc.)
             // we'll do it better when we load/save the simulation (F5/F7)
+            strcpy(log_key,"[R]");sprintf(log_message,"restart simulation\n");
             nudge::log("[R] restart simulation\n");nudge::flush();
-            return;
         }
         if (key->pressed&KEY_SPACE) {
             globals.use_graphic_transform = !globals.use_graphic_transform; /* switch draw mode */
+            strcpy(log_key,"[SPACE]");sprintf(log_message,"view mode: %s\n",globals.use_graphic_transform?"normal":"collision shapes");
             nudge::log("[SPACE] view mode: %s\n",globals.use_graphic_transform?"normal":"collision shapes");nudge::flush();
         }
         if (key->pressed&KEY_F) {
             globals.use_frustum_culling = !globals.use_frustum_culling; /* toggle frustum culling */
+            strcpy(log_key,"[F]");sprintf(log_message,"frustum culling: %s\n",globals.use_frustum_culling?"enabled":"disabled");
             nudge::log("[F] frustum culling: %s\n",globals.use_frustum_culling?"enabled":"disabled");nudge::flush();
         }
         if (key->pressed&(KEY_F5|KEY_F7)) {
             // quick save/load simulation
             const char* filename = "example03.sav"; // ascii only please
-            const bool save = (key->pressed&KEY_F5);            
+            const bool save = (key->pressed&KEY_F5);
+            strcpy(log_key,save?"[F5]":"[F7]");
             FILE* f=fopen(filename,save?"wb":"rb");
             if (f)  {
                 if (save) {
@@ -1257,6 +1239,7 @@ void HandleKeys(void) {
                     fprintf(f,"\nuse_frustum_culling: %u",globals.use_frustum_culling);
                     fprintf(f,"\nuse_shadows: %u",globals.use_shadows);
                     fwrite(&globals.camera[0],sizeof(globals.camera[0]),2,f);
+                    sprintf(log_message,"Saved \"%s\"\n",filename);
                     nudge::log("[F5] Saved \"%s\"\n",filename);
                 }
                 else {
@@ -1268,18 +1251,26 @@ void HandleKeys(void) {
                     cnt=fscanf(f,"\nuse_frustum_culling: %u",&globals.use_frustum_culling);assert(cnt==1);
                     cnt=fscanf(f,"\nuse_shadows: %u",&globals.use_shadows);assert(cnt==1);
                     cnt = fread(&globals.camera[0],sizeof(globals.camera[0]),2,f);assert(cnt==2);
+                    sprintf(log_message,"Loaded \"%s\"\n",filename);
                     nudge::log("[F7] Loaded \"%s\"\n",filename);
                 }
-                fclose(f);                
+                fclose(f);
             }
             else {
-                if (save) nudge::log("[F5] Error: can't create file \"%s\"\n",filename);
-                else nudge::log("[F7] Error: can't find file \"%s\"\n",filename);
+                if (save) {
+                    sprintf(log_message,"Error: can't create file \"%s\"\n",filename);
+                    nudge::log("[F5] Error: can't create file \"%s\"\n",filename);
+                }
+                else {
+                    sprintf(log_message,"Error: can't find file \"%s\"\n",filename);
+                    nudge::log("[F7] Error: can't find file \"%s\"\n",filename);
+                }
             }
             nudge::flush(); // flushes nudge::log(...)
         }
         if (key->pressed&(KEY_MOUSE_BUTTON_RIGHT|KEY_MOUSE_BUTTON_MIDDLE|KEY_ENTER|KEY_END)) {
             globals.use_character_camera=!globals.use_character_camera;
+            strcpy(log_key,"[RMB/MMB/ENTER/END]");sprintf(log_message,"camera mode: %s\n",globals.use_character_camera?"character":"free");
             nudge::log("[RMB/MMB/ENTER/END] camera mode: %s\n",globals.use_character_camera?"character":"free");nudge::flush();
         }
         if (key->pressed&KEY_MOUSE_BUTTON_LEFT && !globals.use_character_camera) ThrowBodyAtMousePos(key->mouseX,key->mouseY);  /* add a body and throw it */
@@ -1290,7 +1281,7 @@ void HandleKeys(void) {
     {
         globals_t::camera_t* cam = &globals.camera[globals.use_character_camera];
         const float instantFrameTime = globals.instantFrameTime;const float speed = 0.4f;
-        if (!(key->down&KEY_CTRL))	{
+        if (!(key->down&KEY_SHIFT))	{
             if (key->down&(KEY_LEFT|KEY_RIGHT)) {
                 cam->cameraYaw+= instantFrameTime*((key->down&KEY_LEFT) ? -4.0f : 4.0f)*speed;
             }
@@ -1309,7 +1300,7 @@ void HandleKeys(void) {
                 cam->cameraPos[0]=cam->cameraPos[1]=cam->cameraPos[2]=0;
             }
         }
-        else if (key->down&KEY_CTRL) {
+        else if (key->down&KEY_SHIFT) {
             if (key->down&KEY_ALL_ARROW_KEYS && !globals.use_character_camera)   {
                 // Here we move targetPos and cameraPos at the same time
 
@@ -1344,6 +1335,21 @@ void HandleKeys(void) {
         }
     }
 
+    // display log_message
+#   ifdef USE_SDF
+    if (log_message[0]!='\0' || c->simulation_params.num_frames==180) {
+        struct SdfTextChunk* tc = globals.sdf.textChunkFlashMessage;assert(tc);
+        SdfClearText(tc);
+        if (log_message[0]=='\0' && c->simulation_params.num_frames==180) SdfAddTextFormattedWithTags(tc,"<halign=CENTER><color=EEEECCFF>Press</color><color=FF6644FF> [SPACE] </color><color=EEEECCFF> to change view mode</color></halign>");
+        else SdfAddTextFormattedWithTags(tc,"<halign=CENTER><color=FF6644FF>%s </color><color=EEEECCFF>%s</color></halign>",log_key,log_message);
+        SdfTextChunkSetMute(tc,false);
+        SdfTextChunkGetAnimationParams(tc).speed = 0.2f;
+        SdfTextChunkSetAnimationMode(tc,SDF_AM_FLASH);
+    }
+#   else
+    if (log_message[0]!='\0') {nudge::log("%s",log_message);nudge::flush();}
+#   endif
+
 }
 
 
@@ -1351,6 +1357,48 @@ void InitGL() {
     // graphics
     Dynamic_Resolution_Init(30,1,1);
     Teapot_Init();
+
+#   ifdef USE_SDF
+    struct globals_t::sdf_t* sdf = &globals.sdf;
+    SdfCharset* gDefaultCharset = SdfAddDefaultCharset();    // DejaVuSerifCondensed-Bold
+    for (unsigned i=0;i<SDF_MAX_NUM_TEXT_CHUNKS;i++) {
+        int typeFlag = i<2? SDF_BT_OUTLINE :(i==2?(SDF_BT_OUTLINE|SDF_BT_SHADOWED):SDF_BT_REGULAR);
+        //int typeFlag = SDF_BT_SHADOWED;  // all the same type works
+        sdf->textChunks[i] = SdfAddTextChunk(gDefaultCharset,typeFlag);
+        //SdfTextChunkSetMute(sdf->textChunks[i],true);
+    }
+
+    // Top line
+    assert(sdf->numTextChunks==0);
+    SdfTextChunk* tc = NULL;SdfTextChunkProperties* tcp = NULL;//SdfGlobalParams* tcg = NULL;SdfAnimationParams* tcap = NULL;
+    tc = sdf->textChunks[sdf->numTextChunks++];//SdfTextChunkSetMute(tc,false);
+    tcp = &SdfTextChunkGetProperties(tc);
+    tcp->halign = SDF_CENTER;tcp->valign = SDF_TOP;
+    //SdfAddTextFormattedWithTags(tc,"%s","TEST_TOP");
+
+    // Bottom line
+    tc = sdf->textChunks[sdf->numTextChunks++];//SdfTextChunkSetMute(tc,false);
+    tcp = &SdfTextChunkGetProperties(tc);
+    tcp->halign = SDF_CENTER;tcp->valign = SDF_BOTTOM;
+    //SdfAddTextFormattedWithTags(tc,"%s","TEST_BOTTOM");
+
+    tc = sdf->textChunks[sdf->numTextChunks++];SdfTextChunkSetMute(tc,true);
+    tcp = &SdfTextChunkGetProperties(tc);
+    tcp->halign = SDF_CENTER;tcp->valign = SDF_BOTTOM;
+    tcp->boundsCenter.y-=0.15f;
+    sdf->textChunkFlashMessage = tc;
+
+    // DIALOG BG PANEL (Use this as a background for dialogs)
+    /*tc = textChunks[numTextChunks++];
+    tcp = &SdfTextChunkGetProperties(tc);
+    tcg = &SdfTextChunkGetGlobalParams(tc);
+    tcp->boundsCenter.y = 0.8f;tcp->boundsHalfSize.y=0.1f;
+    tcp->halign = SDF_CENTER;tcp->valign = SDF_MIDDLE;
+    SdfAddTextFormattedWithTags(tc,"<color=%s>◾</color>","33330088");
+    tcp->maxNumTextLines = 0.5f;tcg->scale.x=1.65f;
+    tcg->scale.y=0.28f;tcg->offset.y=0.25f;
+    dialogBackGroundTextChunk = tc;*/
+#   endif // USE_SDF
 
 	glEnable(GL_DEPTH_TEST);
 	glEnable(GL_CULL_FACE);
@@ -1382,6 +1430,11 @@ void InitGL() {
     Teapot_Enable_ColorMaterial();        
 }
 void DestroyGL() {
+#   ifdef USE_SDF
+    SdfDestroy();
+    for (unsigned i=0;i<SDF_MAX_NUM_TEXT_CHUNKS;i++) globals.sdf.textChunks[i]=NULL;
+    globals.sdf.numTextChunks=0;globals.sdf.textChunkFlashMessage=NULL;
+#   endif
     Teapot_Destroy();
     Dynamic_Resolution_Destroy();
 }
@@ -1450,11 +1503,10 @@ void DrawGL() {
             float fading_alpha = cam->cameraDistance>5.f?sqrtf(sqrtf(cam->cameraDistance-4.f)):1.f;fading_alpha=1.f/(fading_alpha);
             if (fading_alpha>0.01f) {
                 Teapot_LowLevel_StartDisablingLighting();
-                Teapot_SetScaling(1.5f,1.5f,1.5f);
+                glSetScaling(1.5f,1.5f,1.5f);
                 glEnable(GL_BLEND);
-                Teapot_SetColor(1,1,1,fading_alpha);
-                //Teapot_SetColorAmbient(1,1,1);
-                Teapot_Draw(mMatrix,TEAPOT_MESH_PIVOT3D);
+                glSetColor(1,1,1,fading_alpha);
+                glDrawMesh(mMatrix,TEAPOT_MESH_PIVOT3D);
                 glDisable(GL_BLEND);
                 Teapot_LowLevel_StopDisablingLighting();
             }
@@ -1470,6 +1522,75 @@ void DrawGL() {
     Dynamic_Resolution_Render(globals.instantFrameTime);    // Mandatory
     glEnable(GL_DEPTH_TEST);glEnable(GL_CULL_FACE);glDepthMask(GL_TRUE);
     //--------------------------------------------------------------------------------------------------------------
+
+#   ifdef USE_SDF
+    // optional (draw onscreen text)
+    static unsigned long long next_physics_frame = 0;   // we do all this mess just to avoid processing text strings every frame... (little optimization)
+    const unsigned update_text_every_num_frames = 30;   // we update text every 30 physics frames (and we add robustness for the case of a reset of c->simulation_params.num_frames)
+    if (c->simulation_params.num_frames>=next_physics_frame || c->simulation_params.num_frames<next_physics_frame-update_text_every_num_frames-1) {
+        next_physics_frame=c->simulation_params.num_frames+update_text_every_num_frames;
+
+        struct globals_t::sdf_t* sdf = &globals.sdf;assert(sdf->numTextChunks>=2);
+        struct SdfTextChunk* tcTopLine=sdf->textChunks[0];SdfClearText(tcTopLine); // we must clear each text chunk, otherwise we add text to it
+        struct SdfTextChunk* tcBottomLine=sdf->textChunks[1];SdfClearText(tcBottomLine);
+        if (globals.use_graphic_transform) {
+            SdfAddTextFormattedWithTags(tcTopLine,
+                                        "<halign=LEFT><color=FFFF00FF>STARS:</color><color=FFAAAAFF>%u/12</color></halign>"
+                                        ,globals.bodies.num_stars
+                                        );
+            SdfAddTextFormattedWithTags(tcBottomLine,
+                                        "<halign=RIGHT><color=FFFF00FF>FPS:</color><color=FFAAAAFF>%1.f</color></halign>"
+                                        ,Dynamic_Resolution_GetFPS()
+                                        );
+        }
+        else {
+            SdfAddTextFormattedWithTags(tcTopLine,
+                                        "<halign=LEFT><color=FFFF00FF>STARS:</color><color=FFAAAAFF>%u/12</color></halign>"
+                                        "<halign=CENTER><color=FFFF00FF>RIGID BODIES:</color><color=FFAAAAFF>%u</color></halign>"
+                                        "<halign=RIGHT><color=FFFF00FF>REMOVED BODIES:</color><color=FFAAAAFF>%u</color></halign>"
+                                        ,globals.bodies.num_stars
+                                        ,c->bodies.count-c->global_data.removed_bodies_count
+                                        ,c->global_data.removed_bodies_count
+                                        );
+            const int c1 = 0xFFAAAAFF,c2 = 0xFFFFFFFF;
+            SdfAddTextFormattedWithTags(tcBottomLine,
+                                        "<halign=LEFT><color=FFFF00FF>SOME KEYS:</color><scale=0.75>\n"
+                                        "<color=%d>[</color><color=%d>%s</color><color=%d>]</color> "
+                                        "<color=%d>[</color><color=%d>%s</color><color=%d>]</color> "
+                                        "<color=%d>[</color><color=%d>%s</color><color=%d>]</color> "
+                                        "<color=%d>[</color><color=%d>%s</color><color=%d>]</color> "
+                                        "<color=%d>[</color><color=%d>%s</color><color=%d>]</color>\n"
+                                        "<color=%d>[</color><color=%d>%s</color><color=%d>]</color> "
+                                        "<color=%d>[</color><color=%d>%s</color><color=%d>]</color> "
+                                        "<color=%d>[</color><color=%d>%s</color><color=%d>]</color> "
+                                        "<color=%d>[</color><color=%d>%s</color><color=%d>]</color> "
+                                        "<color=%d>[</color><color=%d>%s</color><color=%d>]</color>\n"
+                                        "<color=%d>[</color><color=%d>%s</color><color=%d>]</color> "
+                                        "<color=%d>[</color><color=%d>%s</color><color=%d>]</color> "
+                                        "<color=%d>[</color><color=%d>%s</color><color=%d>]</color> "
+                                        "</scale></halign>"
+                                        ,c1,c2,"H",c1
+                                        ,c1,c2,"M",c1
+                                        ,c1,c2,"F",c1
+                                        ,c1,c2,"SPACE",c1
+                                        ,c1,c2,"ENTER",c1
+                                        ,c1,c2,"WASD",c1
+                                        ,c1,c2,"J",c1
+                                        ,c1,c2,"F5",c1
+                                        ,c1,c2,"F7",c1
+                                        ,c1,c2,"R",c1
+                                        ,c1,c2,"ARROWS(+shift)",c1
+                                        ,c1,c2,"PGUP",c1
+                                        ,c1,c2,"PGDW",c1
+                                        );
+            SdfAddTextFormattedWithTags(tcBottomLine,"<halign=RIGHT><color=FFFF00FF>FPS:</color><color=FFAAAAFF>%1.f</color></halign>",Dynamic_Resolution_GetFPS());
+        }
+    }
+
+    // mandatory
+    float viewport[4];glGetFloatv(GL_VIEWPORT,viewport);
+    SdfRender(viewport,(float)time_now); // unluckily this must be the global application time in seconds... (but it's used only if we animate text)
+#   endif
 
     // key state resetting
     globals.key.down&=~KEY_MOUSE_WHEEL_UP_OR_DOWN;    // we must reset the two mouse wheel flags, because otherwise it does not work
@@ -1707,6 +1828,14 @@ int glIsAabbVisible(const float* __restrict Tpos3,float aabbEnlargedRadius) {
     const float aabb[6] = {Tpos3[0]-aabbEnlargedRadius,Tpos3[1]-aabbEnlargedRadius,Tpos3[2]-aabbEnlargedRadius,Tpos3[0]+aabbEnlargedRadius,Tpos3[1]+aabbEnlargedRadius,Tpos3[2]+aabbEnlargedRadius};
     return Teapot_Helper_LowLevel_IsAABBVisible(globals.is_shadow_pass?glmatrices.lvpMatrixFrustum:glmatrices.frustumPlanes,aabb);
 }
+void Teapot_LowLevel_DrawMesh(const float mMatrix[16],TeapotMeshEnum mesh) {
+#   ifdef TEAPOT_SHADER_USE_SHADOW_MAP
+    Dynamic_Resolution_Shadow_Set_MMatrix(mMatrix);
+    Teapot_LowLevel_DrawElements(mesh);
+#   endif
+}
+void Teapot_SetColorEnumFake(ColorEnum ) {}
+void Teapot_SetColorFake(float,float,float,float) {}
 void bindShadowPass(void)   {
 #   ifdef TEAPOT_SHADER_USE_SHADOW_MAP
     if (globals.use_shadows) {
@@ -1714,6 +1843,11 @@ void bindShadowPass(void)   {
         glClear(GL_DEPTH_BUFFER_BIT);
         Dynamic_Resolution_Shadow_Set_VpMatrix(glmatrices.lvpMatrix);
         Teapot_LowLevel_BindVertexBufferObjectAndEnableVertexAttributes(1,1);
+
+        glSetColorEnum=&Teapot_SetColorEnumFake;
+        glSetColor=&Teapot_SetColorFake;
+        glSetScaling=&Dynamic_Resolution_Shadow_Set_Scaling;
+        glDrawMesh=&Teapot_LowLevel_DrawMesh;
     }
 #   endif //TEAPOT_SHADER_USE_SHADOW_MAP
 }
@@ -1731,6 +1865,11 @@ void unbindShadowPass(void) {
         glBindTexture(GL_TEXTURE_2D,Dynamic_Resolution_Get_Shadow_Texture_ID());
     }
     else glBindTexture(GL_TEXTURE_2D,0);
+
+    glSetColorEnum=&Teapot_SetColorEnum;
+    glSetColor=&Teapot_SetColor;
+    glSetScaling=&Teapot_SetScaling;
+    glDrawMesh=&Teapot_Draw;
 #   endif //TEAPOT_SHADER_USE_SHADOW_MAP
 }
 
@@ -1752,7 +1891,6 @@ void nm_QuatToEulerYPR(const float* q,float* a0,float* a1, float* a2,int i=1,int
     if (not_proper) {*a2=sign*tm;*a1-=M_PI*0.5;}
 }
 float nm_QuatGetYaw(const float* q) {float y,p,r;nm_QuatToEulerYPR(q,&y,&p,&r);return y;}
-
 
 
 void Teapot_SetColorEnum(ColorEnum color) {
